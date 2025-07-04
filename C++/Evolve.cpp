@@ -94,7 +94,12 @@ vector<double> mutation(const vector<double> & parent) {
 	return result;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    int generations = 100; // Default number of generations
+    if (argc > 1) {
+        generations = atoi(argv[1]);
+    }
+    cerr << "Running for " << generations << " generations." << endl;
 	// keep survivors + keep^2/2 crossovers + mutations = gen_size;
 	const int keep = (int) sqrt(gen_size);
 
@@ -111,7 +116,7 @@ int main() {
 	fitlog << endl;
 
 	// Simple fixed number of generations
-	for (int gen = 0; gen < gen_limit; ++gen) {
+	for (int gen = 0; gen < generations; ++gen) {
 		cerr << "Evaulating generation " << gen << "...";
 
 		// Take the survivors from the previous generation
@@ -146,50 +151,5 @@ int main() {
 
 	fitlog.close();
 
-	// When we are done, animate the best player from the last generation playing against itself for the user.
-	while (true) {
-		cerr << "Press Enter to run simulation" << endl;
-		cin.ignore();
-		cerr << endl << endl << endl;
-		NeuroPlayer left(layers, population[0]);
-		NeuroPlayer right(layers, population[0]);
-		PongGame pong(left, right);
-		pong.max_score = 2;
-		while (max(pong.left_score, pong.right_score) < pong.max_score) {
-			cout << " ";
-			for (int i = 0; i < 2 * (int) pong.length / 10; ++i)
-				cout << "=";
-			cout << " " << endl;
-			for (int i = (int) -pong.width / 20; i <= (int) pong.width / 20; ++i) {
-				if (abs((int) pong.left_pos/10 - i) <= (int) pong.paddle_width / 20)
-					cout << "|";
-				else
-					cout << " ";
-				for (int j = 0; j < 2 * (int) pong.length / 10; ++j) {
-					if ((int) (pong.ball_pos.y / 10) == i && (int) (2 * (int) pong.ball_pos.x / 10 + 2 * (int) pong.length / 20) == j) {
-						cout << "O";
-					} else {
-						cout << " ";
-					}
-				}
-				if (abs((int) pong.right_pos/10 - i) <= (int) pong.paddle_width / 20)
-					cout << "|";
-				else
-					cout << " ";
-				cout << endl;
-			}
-			cout << " ";
-			for (int i = 0; i < 2 * (int) pong.length / 10; ++i)
-				cout << "=";
-			cerr << " " << endl;
-			cerr << "ball_pos: " << pong.ball_pos << "\tball_vel: " << pong.ball_vel << endl;
-			cerr << "left_pos: " << pong.left_pos << "\tleft_vel: " << pong.left_vel << endl;
-			cerr << "right_pos: " << pong.right_pos << "\tright_vel: " << pong.right_vel << endl;
-			cerr << "left_score: " << pong.left_score << "\tright_score: " << pong.right_score << endl;
-			pong.tick();
-			this_thread::sleep_for(chrono::milliseconds(1000/pong.tickrate));
-		}
-		cerr << "SCORES: " << pong.left_score << ", " << pong.right_score << endl;
-	}
 	return 0;
 }

@@ -1,140 +1,173 @@
-use rand::Rng;
-use std::fmt;
-use std::simd::f64x16;
-use std::simd::f64x4;
-use std::simd::f64x8;
+use std::io;
+use std::env;
+use crossterm::{terminal::{enable_raw_mode, EnterAlternateScreen}, execute};
+use ratatui::{prelude::*, widgets::*};
 
-const MAX_SCORE: u8 = 1;
-const TICK_RATE: u16 = 60;
-const LENGTH: u16 = 400;
-const WIDTH: u16 = 300;
-const PADDLE_WIDTH: u16 = WIDTH / 8;
-const PADDLE_MAX_VEL: u16 = WIDTH / TICK_RATE;
-const MAX_POSITION: u16 = WIDTH - PADDLE_WIDTH;
-const BALL_START_VEL: [i16; 2] = [
-    LENGTH as i16 / TICK_RATE as i16,
-    LENGTH as i16 / TICK_RATE as i16,
-];
-const LAYERS: &[usize] = &[8, 16, 4, 1];
-const TOTAL_WEIGHTS: usize =
-    (LAYERS[0] + 1) * LAYERS[1] + (LAYERS[1] + 1) * LAYERS[2] + (LAYERS[2] + 1) * LAYERS[3];
+// Constants module
+mod constants;
+mod game;
+mod net;
+mod paddle;
 
-struct Net {
-    weights: [f64; TOTAL_WEIGHTS],
-}
+use crate::{
+    constants::{ELITISM_RATIO, MAX_SCORE, POPULATION_SIZE},
+    game::GameState,
+    net::Net,
+    paddle::Paddle,
+};
 
-struct GameState {
-    ball_position: [u16; 2], // [0, WIDTH] x [0, LENGTH]
-    ball_velocity: [i16; 2], // [-PADDLE_MAX_VEL, PADDLE_MAX_VEL]
-    left_position: u16,      // [0, WIDTH - PADDLE_WIDTH]
-    left_velocity: i16,      // [-PADDLE_MAX_VEL, PADDLE_MAX_VEL]
-    right_position: u16,     // [0, WIDTH - PADDLE_WIDTH]
-    right_velocity: i16,     // [-PADDLE_MAX_VEL, PADDLE_MAX_VEL]
-    left_score: u8,
-    right_score: u8,
-    left_returns: u16,
-    right_returns: u16,
-    left_shots: u16,
-    right_shots: u16,
-}
+fn main() -> io::Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let generations = if args.len() > 1 {
+        args[1].parse().unwrap_or(100)
+    } else {
+        100
+    };
+    println!("Running for {} generations...", generations);
 
-impl GameState {
-    fn update_paddles(&mut self, left: &Net, right: &Net) {
-        self.left_velocity = left.update_and_respond(self);
-        self.right_velocity = right.update_and_respond(self);
-        self.left_position = self.left_position.saturating_add_signed(self.left_velocity);
-        self.right_position = self
-            .right_position
-            .saturating_add_signed(self.right_velocity);
-        if self.left_position > MAX_POSITION {
-            self.left_position = MAX_POSITION
-        }
-        if self.right_position > MAX_POSITION {
-            self.right_position = MAX_POSITION
-        }
-    }
+    // 1. Initialize a population of neural networks.
+    let mut population: Vec<Net> = (0..POPULATION_SIZE).map(|_| Net::new()).collect();
 
-    fn update_ball(&mut self) {}
-
-    fn tick(&mut self) {}
-}
-
-impl fmt::Debug for Net {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Net")
-            .field("weights", &self.weights)
-            .finish()
-    }
-}
-
-impl Net {
-    fn new() -> Net {
-        let mut rng = rand::rng();
-        Net {
-            weights: rng.random(),
-        }
-    }
-
-    fn update_and_respond(&self, state: &GameState) -> i16 {
-        // Input layer
-        let input = [
-            state.ball_position[0] as f64, // 0 to WIDTH
-            state.ball_position[1] as f64, // 0 to LENGTH
-            state.ball_velocity[0] as f64, // -PADDLE_MAX_VEL to PADDLE_MAX_VEL
-            state.ball_velocity[1] as f64, // -PADDLE_MAX_VEL to PADDLE_MAX_VEL
-            state.left_position as f64,    // 0 to WIDTH
-            state.left_velocity as f64,    // -PADDLE_MAX_VEL to PADDLE_MAX_VEL
-            state.right_position as f64,   // 0 to WIDTH
-            state.right_velocity as f64,   // -PADDLE_MAX_VEL to PADDLE_MAX_VEL
-        ];
-
-        // Layer 1: 8 inputs → 16 neurons
-        let mut layer1 = [0.0; 16];
-        let mut weight_idx = 0;
-        for i in 0..16 {
-            for j in 0..8 {
-                layer1[i] += self.weights[weight_idx] * input[j];
-                weight_idx += 1;
+    // 2. Loop for the specified number of generations.
+    for gen in 0..generations {
+        // a. Evaluate fitness using a round-robin tournament where each network plays every other network.
+        let mut fitness_scores = vec![0.0; POPULATION_SIZE];
+        for i in 0..POPULATION_SIZE {
+            for j in (i + 1)..POPULATION_SIZE {
+                let (fitness1, fitness2) = run_training_game(&population[i], &population[j]);
+                fitness_scores[i] += fitness1;
+                fitness_scores[j] += fitness2;
             }
-            layer1[i] += self.weights[weight_idx]; // Bias
-            weight_idx += 1;
-            layer1[i] = layer1[i].clamp(-1.0, 1.0); // Activation function
         }
 
-        // Layer 2: 16 inputs → 4 neurons
-        let mut layer2 = [0.0; 4];
-        for i in 0..4 {
-            for j in 0..16 {
-                layer2[i] += self.weights[weight_idx] * layer1[j];
-                weight_idx += 1;
-            }
-            layer2[i] += self.weights[weight_idx]; // Bias
-            weight_idx += 1;
-            layer2[i] = layer2[i].clamp(-1.0, 1.0); // Activation function
-        }
+        // b. Combine networks and their fitness scores for sorting.
+        let mut ranked_population: Vec<(Net, f64)> = population
+            .into_iter()
+            .zip(fitness_scores.into_iter())
+            .collect();
 
-        // Layer 3: 4 inputs → 1 neuron
-        let mut output = 0.0;
-        for i in 0..4 {
-            output += self.weights[weight_idx] * layer2[i];
-            weight_idx += 1;
-        }
-        output += self.weights[weight_idx]; // Bias
-        output = output.clamp(-1.0, 1.0); // Activation function
+        // c. Sort the population by fitness in descending order.
+        ranked_population.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
-        // Final output clamping
-        (output * PADDLE_MAX_VEL as f64).clamp(-PADDLE_MAX_VEL as f64, PADDLE_MAX_VEL as f64) as i16
+        println!(
+            "Generation {}: Best Fitness = {:.2}",
+            gen, ranked_population[0].1
+        );
+
+        // d. Create the next generation.
+        population = create_next_generation(&ranked_population);
+
+        // e. Optionally, render a game with the best network.
+        // if gen % 10 == 0 {
+        //     println!("Rendering best of generation {}", gen);
+        //     render_game(&ranked_population[0].0)?;
+        // }
     }
 
-    fn mutate(&self) {}
+    println!("Training complete.");
+    Ok(())
+}
 
-    fn evolve(&self) {
-        self.mutate();
+/// Creates a new generation of networks from the ranked parents of the previous generation.
+fn create_next_generation(ranked_population: &[(Net, f64)]) -> Vec<Net> {
+    let mut next_generation = Vec::with_capacity(POPULATION_SIZE);
+
+    // 1. Elitism: Keep the best-performing networks.
+    let elite_count = (ELITISM_RATIO * POPULATION_SIZE as f64).round() as usize;
+    for i in 0..elite_count {
+        // Add the elite networks directly to the next generation.
+        next_generation.push(ranked_population[i].0.clone());
     }
+
+    // 2. Crossover & Mutation: Fill the rest of the new generation.
+    let remaining = POPULATION_SIZE - elite_count;
+    for i in 0..remaining {
+        // Select a random elite parent to be the basis for a new offspring.
+        let parent = &ranked_population[i % elite_count].0;
+        let mut offspring = parent.clone();
+        // Mutate the offspring to introduce variation.
+        offspring.mutate();
+        next_generation.push(offspring);
+    }
+
+    next_generation
 }
 
-fn main() {
-    let net = Net::new();
-    // net.evolve();
-    // println!("{:?}", net);
+/// Runs a game simulation between two neural networks and returns their fitness scores.
+fn run_training_game(net1: &Net, net2: &Net) -> (f64, f64) {
+    let mut game = GameState::new();
+    game.paddles[0].net = net1.clone();
+    game.paddles[1].net = net2.clone();
+
+    // Simulate the game until a player reaches the max score.
+    while game.score[0] < MAX_SCORE && game.score[1] < MAX_SCORE {
+        game.tick();
+        // Add a safeguard to prevent infinite loops in case of a stalemate.
+        if game.ticks > 60 * 1000 { // 1000 seconds @ 60 TPS
+            break;
+        }
+    }
+
+    // Fitness is calculated based on how long the game lasted (ticks),
+    // how many times the ball was returned, and a penalty for shots taken.
+    // This formula is based on the C++ implementation.
+    let fitness1 = (game.ticks as f64) * 1000.0 + (game.returns[0] as f64) * 100.0
+        - (game.shots[0] as f64).powf(2.0);
+    let fitness2 = (game.ticks as f64) * 1000.0 + (game.returns[1] as f64) * 100.0
+        - (game.shots[1] as f64).powf(2.0);
+
+    (fitness1, fitness2)
 }
+
+/// Renders a full game in the terminal using the TUI.
+fn render_game(_net: &Net) -> io::Result<()> {
+    // Setup the terminal
+    let mut terminal = setup_terminal()?;
+
+    // Create game state
+    let mut game_state = GameState::new();
+
+    // Main game loop
+    loop {
+        terminal.draw(|f| ui(f, &game_state))?;
+
+        game_state.tick();
+
+        // TODO: Add logic to handle input and exit conditions
+        // For now, we can just run for a fixed number of ticks.
+        if game_state.ticks > 1000 {
+            break;
+        }
+    }
+
+    // Restore the terminal
+    restore_terminal()
+}
+
+/// Sets up the terminal for TUI rendering.
+fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    let mut stdout = io::stdout();
+    enable_raw_mode()?;
+    execute!(stdout, EnterAlternateScreen)?;
+    Terminal::new(CrosstermBackend::new(stdout))
+}
+
+/// Restores the terminal to its original state.
+fn restore_terminal() -> io::Result<()> {
+    // Implementation details would go here...
+    Ok(())
+}
+
+/// Defines the UI layout and widgets.
+fn ui(frame: &mut Frame, game_state: &GameState) {
+    // This is where you define what to draw on the screen.
+    // 1. Create a main layout (e.g., a central block for the play area).
+    // 2. Draw the play area boundaries.
+    // 3. Draw the ball at its current position.
+    // 4. Draw the left and right paddles at their positions.
+    // 5. Draw the scores.
+    let main_block = Block::default().borders(Borders::ALL).title("Pong");
+    frame.render_widget(main_block, frame.size());
+    // More rendering logic would go here...
+}
+
