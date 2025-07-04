@@ -19,5 +19,16 @@ pub const POPULATION_SIZE: usize = 128;
 /// The number of the best networks to carry over to the next generation.
 pub const ELITE_COUNT: usize = 11; // sqrt(128)
 pub const LAYERS: [usize; 4] = [8, 16, 4, 1];
-pub const TOTAL_WEIGHTS: usize =
-    (LAYERS[0] + 1) * LAYERS[1] + (LAYERS[1] + 1) * LAYERS[2] + (LAYERS[2] + 1) * LAYERS[3];
+
+// A const function to calculate the total number of weights and biases needed.
+const fn get_total_weights() -> usize {
+    let mut total = 0;
+    let mut i = 0;
+    while i < LAYERS.len() - 1 {
+        total += LAYERS[i] * LAYERS[i + 1] + LAYERS[i + 1]; // weights + biases
+        i += 1;
+    }
+    total
+}
+
+pub const TOTAL_WEIGHTS: usize = get_total_weights();

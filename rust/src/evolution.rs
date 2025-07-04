@@ -4,24 +4,27 @@ use crate::{
     net::Net,
     paddle::Paddle,
 };
-use rand::Rng;
+use rand::{Rng, thread_rng};
 use std::fs;
 use std::io;
 
 const BEST_NET_FILE: &str = "best_net.json";
 
 /// Runs the main genetic algorithm evolution loop.
-pub fn run_evolution(generations: u32) -> io::Result<()> {
+pub fn run_evolution_stack(generations: u32) -> io::Result<()> {
     println!("Running for {} generations...", generations);
 
-    // Initialize population with random networks
-    let mut population: Vec<Net> = (0..POPULATION_SIZE).map(|_| Net::new()).collect();
+    // Initialize population on the stack
+    let mut population = [Net::default(); POPULATION_SIZE];
+    for net in &mut population {
+        *net = Net::new();
+    }
 
     for gen in 0..generations {
         // --- Fitness Evaluation ---
         // Each network's fitness is determined by (plays, wins)
         // plays = returns + shots
-        let mut fitness_scores: Vec<(i32, i32)> = vec![(0, 0); POPULATION_SIZE];
+        let mut fitness_scores = [(0, 0); POPULATION_SIZE];
 
         for i in 0..POPULATION_SIZE {
             for j in (i + 1)..POPULATION_SIZE {
@@ -41,7 +44,10 @@ pub fn run_evolution(generations: u32) -> io::Result<()> {
         }
 
         // --- Ranking ---
-        let mut ranked_indices: Vec<usize> = (0..POPULATION_SIZE).collect();
+        let mut ranked_indices = [0; POPULATION_SIZE];
+        for (i, v) in ranked_indices.iter_mut().enumerate() {
+            *v = i;
+        }
 
         // Sort indices based on fitness scores (plays descending, then wins descending)
         ranked_indices.sort_unstable_by(|&a, &b| {
@@ -57,42 +63,41 @@ pub fn run_evolution(generations: u32) -> io::Result<()> {
             gen, best_fitness.0, best_fitness.1
         );
 
-        // --- Breeding ---
-        let mut next_generation = Vec::with_capacity(POPULATION_SIZE);
+        // --- Breeding (in-place) ---
+        let elite_indices = &ranked_indices[..ELITE_COUNT];
+        let non_elite_indices = &ranked_indices[ELITE_COUNT..];
 
-        // 1. Elitism: Keep the best-performing networks (the elites)
-        let elites: Vec<Net> = ranked_indices
-            .iter()
-            .take(ELITE_COUNT)
-            .map(|&index| population[index].clone())
-            .collect();
+        // The elites are preserved. We will overwrite the non-elites.
+        let mut non_elite_iter = non_elite_indices.iter().copied();
 
-        next_generation.extend(elites.iter().cloned());
-
-        // 2. Crossover: Breed new networks from the elites
-        for i in 0..ELITE_COUNT {
+        // 1. Crossover: Overwrite some non-elites with children of elites.
+        'crossover: for i in 0..ELITE_COUNT {
             for j in (i + 1)..ELITE_COUNT {
-                if next_generation.len() < POPULATION_SIZE {
-                    let child = Net::crossover(&elites[i], &elites[j]);
-                    next_generation.push(child);
+                if let Some(dest_index) = non_elite_iter.next() {
+                    let p1 = population[elite_indices[i]]; // It's a copy
+                    let p2 = population[elite_indices[j]]; // It's a copy
+                    let child = &mut population[dest_index];
+                    Net::crossover(&p1, &p2, child);
+                } else {
+                    break 'crossover; // No more non-elite slots to fill.
                 }
             }
         }
 
-        // 3. Mutation: Fill the remaining spots with mutations of the elites
-        let mut rng = rand::thread_rng();
-        while next_generation.len() < POPULATION_SIZE {
-            let mut parent = elites[rng.gen_range(0..ELITE_COUNT)].clone();
-            parent.mutate();
-            next_generation.push(parent);
+        // 2. Mutation: Overwrite the rest of the non-elites with mutated elites.
+        let mut rng = thread_rng();
+        for dest_index in non_elite_iter {
+            let parent_index = elite_indices[rng.gen_range(0..ELITE_COUNT)];
+            let mut new_net = population[parent_index]; // It's a copy
+            new_net.mutate();
+            population[dest_index] = new_net;
         }
-
-        population = next_generation;
+        // The `population` vector has now been updated in-place.
     }
 
     // After all generations, re-evaluate the final population to find the true best network.
     println!("\n--- Final Evaluation ---");
-    let mut final_fitness_scores: Vec<(i32, i32)> = vec![(0, 0); POPULATION_SIZE];
+    let mut final_fitness_scores = [(0, 0); POPULATION_SIZE];
     for i in 0..POPULATION_SIZE {
         for j in (i + 1)..POPULATION_SIZE {
             let game = run_training_game(&population[i], &population[j]);
@@ -106,7 +111,10 @@ pub fn run_evolution(generations: u32) -> io::Result<()> {
         }
     }
 
-    let mut final_ranked_indices: Vec<usize> = (0..POPULATION_SIZE).collect();
+    let mut final_ranked_indices = [0; POPULATION_SIZE];
+    for (i, v) in final_ranked_indices.iter_mut().enumerate() {
+        *v = i;
+    }
     final_ranked_indices.sort_unstable_by(|&a, &b| {
         final_fitness_scores[b]
             .0

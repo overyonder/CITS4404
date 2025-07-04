@@ -1,57 +1,56 @@
-use std::io::{self, Write};
-
-// Project modules
 mod constants;
 mod evolution;
 mod game;
+mod menu;
 mod net;
 mod paddle;
 mod tui;
 
-const BEST_NET_FILE: &str = "best_net.json";
+use clap::{Parser, ValueEnum};
+use evolution::run_evolution_stack;
+use menu::run_app;
+use std::io;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// The computation engine to use for training.
+    #[arg(short, long)]
+    engine: Option<Engine>,
+
+    /// The number of generations to run training for.
+    #[arg(short, long, default_value_t = 100)]
+    generations: u32,
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+enum Engine {
+    Stack,
+    Simd,
+    Gpu,
+}
 
 fn main() -> io::Result<()> {
-    loop {
-        println!("\n--- Pong AI Menu ---");
-        println!("1. Train new model");
-        println!("2. Run simulation with best model");
-        println!("3. Exit");
-        print!("Please enter your choice: ");
-        io::stdout().flush()?;
+    let args = Args::parse();
 
-        let mut choice = String::new();
-        io::stdin().read_line(&mut choice)?;
-
-        match choice.trim() {
-            "1" => {
-                println!("\nHow many generations should the training run for? (e.g., 100)");
-                print!("> ");
-                io::stdout().flush()?;
-                let mut generations_str = String::new();
-                io::stdin().read_line(&mut generations_str)?;
-                let generations = generations_str.trim().parse().unwrap_or(100);
-                evolution::run_evolution(generations)?;
+    if let Some(engine) = args.engine {
+        // Benchmark mode: run directly from command line arguments
+        println!(
+            "Running in benchmark mode with engine: {:?}, for {} generations",
+            engine, args.generations
+        );
+        match engine {
+            Engine::Stack => run_evolution_stack(args.generations)?,
+            Engine::Simd => {
+                println!("SIMD engine not yet implemented.");
             }
-            "2" => {
-                println!("\nStarting simulation...");
-                // Load the best network and create paddles from it.
-                let left_paddle = paddle::Paddle::from_best_net(BEST_NET_FILE);
-                let right_paddle = paddle::Paddle::from_best_net(BEST_NET_FILE);
-
-                // Create a new game state with the trained paddles.
-                let game_state = game::GameState::new_with_paddles(left_paddle, right_paddle);
-
-                // Render the game with the loaded state.
-                tui::render_game(Some(game_state))?;
-            }
-            "3" => {
-                println!("Exiting.");
-                break;
-            }
-            _ => {
-                println!("Invalid choice, please try again.");
+            Engine::Gpu => {
+                println!("GPU engine not yet implemented.");
             }
         }
+    } else {
+        // Interactive mode: run the Ratatui menu app
+        run_app()?;
     }
 
     Ok(())

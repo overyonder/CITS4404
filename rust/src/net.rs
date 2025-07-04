@@ -1,39 +1,49 @@
 use crate::constants::{LAYERS, TOTAL_WEIGHTS};
-use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
-use rand_distr::{Distribution, Normal};
+use rand::prelude::*;
+use rand_distr::Normal;
 use serde::{Deserialize, Serialize};
+use rand::thread_rng;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Net {
-    pub weights: Vec<f64>,
+    #[serde(with = "serde_big_array::BigArray")]
+    pub weights: [f64; TOTAL_WEIGHTS],
+}
+
+impl Default for Net {
+    fn default() -> Self {
+        Self {
+            weights: [0.0; TOTAL_WEIGHTS],
+        }
+    }
 }
 
 impl Net {
+    /// Initializes a new network with random weights.
     pub fn new() -> Self {
-        // We use a fixed seed for deterministic initialization.
-        let mut rng = StdRng::from_seed([0; 32]);
-        let mut weights = Vec::with_capacity(TOTAL_WEIGHTS);
-        for _ in 0..TOTAL_WEIGHTS {
-            weights.push(rng.gen_range(-1.0..1.0));
+        let mut rng = thread_rng();
+        let mut weights = [0.0; TOTAL_WEIGHTS];
+        for weight in weights.iter_mut() {
+            *weight = rng.gen_range(-1.0..1.0);
         }
         Self { weights }
     }
 
     /// Creates a new network by combining the weights of two parent networks.
-    pub fn crossover(p1: &Self, p2: &Self) -> Self {
+    pub fn crossover(p1: &Self, p2: &Self, child: &mut Self) {
         let mut rng = thread_rng();
-        let mut child_weights = Vec::with_capacity(TOTAL_WEIGHTS);
+        assert!(
+            p1.weights.len() == child.weights.len() && p2.weights.len() == child.weights.len(),
+            "Parent and child networks must have the same number of weights."
+        );
 
-        for i in 0..TOTAL_WEIGHTS {
-            if rng.gen() { // Randomly pick between true and false
-                child_weights.push(p1.weights[i]);
+        for i in 0..child.weights.len() {
+            if rng.gen() {
+                child.weights[i] = p1.weights[i];
             } else {
-                child_weights.push(p2.weights[i]);
+                child.weights[i] = p2.weights[i];
             }
         }
-
-        Self { weights: child_weights }
     }
 
     /// Applies a mutation to the network's weights.
@@ -41,7 +51,7 @@ impl Net {
     pub fn mutate(&mut self) {
         let mut rng = thread_rng();
         let normal = Normal::new(0.0, 1.0).unwrap();
-        
+
         let weight_index = rng.gen_range(0..self.weights.len());
         self.weights[weight_index] += normal.sample(&mut rng);
     }

@@ -1,5 +1,5 @@
 use crate::{
-    constants::{LENGTH, MAX_POSITION, PADDLE_HEIGHT, PADDLE_WIDTH, WIDTH},
+    constants::{LENGTH, MAX_POSITION, PADDLE_HEIGHT, WIDTH},
     game::GameState,
 };
 use crossterm::{
@@ -65,7 +65,7 @@ fn ui(frame: &mut Frame, game: &GameState) {
             Constraint::Length(1), // 1-line-high area for scores
             Constraint::Min(0),    // The rest of the screen for the game
         ])
-        .split(frame.size());
+        .split(frame.area());
 
     let score_area = main_layout[0];
     let game_area = main_layout[1];

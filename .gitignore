@@ -60,7 +60,7 @@ Makefile
 *.ninja_log
 
 # Rust
-target/
+**/target/
 **/*.rs.bk
 **/*.rs.old
 **/*.rs.new
