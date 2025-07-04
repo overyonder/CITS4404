@@ -1,90 +1,93 @@
-use crate::constants::{LAYERS, MUTATION_AMOUNT, MUTATION_RATE, TOTAL_WEIGHTS};
+use crate::constants::{LAYERS, TOTAL_WEIGHTS};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
+use rand_distr::{Distribution, Normal};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Net {
-    pub weights: [f64; TOTAL_WEIGHTS],
+    pub weights: Vec<f64>,
 }
 
 impl Net {
     pub fn new() -> Self {
         // We use a fixed seed for deterministic initialization.
         let mut rng = StdRng::from_seed([0; 32]);
-        let mut weights = [0.0; TOTAL_WEIGHTS];
-        for w in weights.iter_mut() {
-            *w = rng.gen_range(-1.0..1.0);
+        let mut weights = Vec::with_capacity(TOTAL_WEIGHTS);
+        for _ in 0..TOTAL_WEIGHTS {
+            weights.push(rng.gen_range(-1.0..1.0));
         }
         Self { weights }
     }
 
-    /// Activation function for a neuron. Clamps the value between -1.0 and 1.0.
-    fn activation(x: f64) -> f64 {
-        x.clamp(-1.0, 1.0)
+    /// Creates a new network by combining the weights of two parent networks.
+    pub fn crossover(p1: &Self, p2: &Self) -> Self {
+        let mut rng = thread_rng();
+        let mut child_weights = Vec::with_capacity(TOTAL_WEIGHTS);
+
+        for i in 0..TOTAL_WEIGHTS {
+            if rng.gen() { // Randomly pick between true and false
+                child_weights.push(p1.weights[i]);
+            } else {
+                child_weights.push(p2.weights[i]);
+            }
+        }
+
+        Self { weights: child_weights }
+    }
+
+    /// Applies a mutation to the network's weights.
+    /// A single weight is chosen at random and perturbed by a value from a normal distribution.
+    pub fn mutate(&mut self) {
+        let mut rng = thread_rng();
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        
+        let weight_index = rng.gen_range(0..self.weights.len());
+        self.weights[weight_index] += normal.sample(&mut rng);
     }
 
     /// Performs a forward pass through the neural network.
-    pub fn forward_propagate(&self, inputs: &[f64; LAYERS[0]]) -> f64 {
-        // The largest layer size is used for the ping-pong buffers.
-        // This must be updated if LAYERS changes.
-        const MAX_LAYER_SIZE: usize = 16;
+    pub fn forward_propagate(&self, inputs: &[f64; 8]) -> f64 {
+        assert_eq!(inputs.len(), LAYERS[0]);
 
-        let mut values1 = [0.0; MAX_LAYER_SIZE];
-        let mut values2 = [0.0; MAX_LAYER_SIZE];
+        let mut current_activations: Vec<f64> = inputs.to_vec();
+        let mut weight_offset = 0;
 
-        // `prev_layer_values` starts by pointing to the network's input slice.
-        let mut prev_layer_values: &[f64] = inputs;
-        let mut weight_idx = 0;
+        // Iterate through each layer transition (e.g., 0->1, 1->2, 2->3)
+        for i in 0..(LAYERS.len() - 1) {
+            let input_size = LAYERS[i] + 1; // +1 for bias
+            let output_size = LAYERS[i + 1];
 
-        // Iterate through each layer, starting from the first hidden layer.
-        for i in 1..LAYERS.len() {
-            let current_layer_size = LAYERS[i];
-            let prev_layer_size = LAYERS[i - 1];
+            let mut next_activations = vec![0.0; output_size];
 
-            // Determine which buffer to write to (ping-pong).
-            let current_layer_buffer = if i % 2 == 1 {
-                &mut values1[..current_layer_size]
-            } else {
-                &mut values2[..current_layer_size]
-            };
+            for j in 0..output_size {
+                let weights_start = weight_offset + j * input_size;
+                let weights_end = weights_start + input_size;
+                let weights_for_neuron = &self.weights[weights_start..weights_end];
 
-            for neuron_idx in 0..current_layer_size {
-                // Calculate the weighted sum of inputs from the previous layer.
                 let mut sum = 0.0;
-                for prev_neuron_idx in 0..prev_layer_size {
-                    sum += prev_layer_values[prev_neuron_idx] * self.weights[weight_idx];
-                    weight_idx += 1;
+                // Add weighted inputs
+                for k in 0..LAYERS[i] {
+                    sum += current_activations[k] * weights_for_neuron[k];
                 }
-                // Add the bias for the current neuron.
-                sum += self.weights[weight_idx];
-                weight_idx += 1;
+                // Add bias
+                sum += weights_for_neuron[LAYERS[i]];
 
-                current_layer_buffer[neuron_idx] = Self::activation(sum);
+                // Apply activation function
+                if i < LAYERS.len() - 2 {
+                    // Hidden layers use ReLU
+                    next_activations[j] = sum.max(0.0);
+                } else {
+                    // Output layer uses tanh to constrain output between -1 and 1
+                    next_activations[j] = sum.tanh();
+                }
             }
-            // The buffer we just wrote to becomes the 'previous layer' for the next iteration.
-            prev_layer_values = current_layer_buffer;
+
+            current_activations = next_activations;
+            weight_offset += input_size * output_size;
         }
 
-        // The final result is in the last buffer we wrote to, which has a size of 1.
-        prev_layer_values[0]
-    }
-
-    pub fn mutate(&mut self) {
-        // Use a seeded RNG for deterministic mutations during training.
-        // In a real application, you might use from_entropy() for more randomness.
-        let mut rng = StdRng::from_seed([1; 32]);
-
-        for weight in self.weights.iter_mut() {
-            if rng.gen::<f64>() < MUTATION_RATE {
-                let change = rng.gen_range(-MUTATION_AMOUNT..MUTATION_AMOUNT);
-                *weight += change;
-                // Clamp the weight to keep it within a reasonable range.
-                *weight = weight.clamp(-1.0, 1.0);
-            }
-        }
-    }
-
-    pub fn evolve(&mut self) {
-        self.mutate();
+        // The network has a single output neuron
+        current_activations[0]
     }
 }

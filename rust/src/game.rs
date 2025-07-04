@@ -1,7 +1,7 @@
 use crate::constants::*;
 use crate::paddle::Paddle;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ball {
     // Using f64 for smooth, sub-pixel movement, matching the C++ version.
     pub position: [f64; 2],
@@ -28,6 +28,17 @@ pub struct GameState {
 }
 
 impl GameState {
+    pub fn new_with_paddles(paddle1: Paddle, paddle2: Paddle) -> Self {
+        Self {
+            paddles: [paddle1, paddle2],
+            ball: Ball::new(),
+            score: [0, 0],
+            returns: [0, 0],
+            shots: [0, 0],
+            ticks: 0,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             paddles: [Paddle::new(), Paddle::new()],
@@ -92,7 +103,10 @@ impl GameState {
         let paddle_top = self.paddles[0].position as f64 - PADDLE_HEIGHT as f64 / 2.0;
         let paddle_bottom = self.paddles[0].position as f64 + PADDLE_HEIGHT as f64 / 2.0;
 
-        if next_x < PADDLE_WIDTH as f64 && self.ball.position[1] >= paddle_top && self.ball.position[1] <= paddle_bottom {
+        if next_x < PADDLE_WIDTH as f64
+            && self.ball.position[1] >= paddle_top
+            && self.ball.position[1] <= paddle_bottom
+        {
             self.ball.velocity[0] *= -1.0;
             // Optional: Add some of the paddle's velocity for spin.
             // self.ball.velocity[1] += self.left_paddle.velocity as f64 * 0.1;
@@ -103,7 +117,10 @@ impl GameState {
         let paddle_top = self.paddles[1].position as f64 - PADDLE_HEIGHT as f64 / 2.0;
         let paddle_bottom = self.paddles[1].position as f64 + PADDLE_HEIGHT as f64 / 2.0;
 
-        if next_x > (WIDTH - PADDLE_WIDTH) as f64 && self.ball.position[1] >= paddle_top && self.ball.position[1] <= paddle_bottom {
+        if next_x > (WIDTH - PADDLE_WIDTH) as f64
+            && self.ball.position[1] >= paddle_top
+            && self.ball.position[1] <= paddle_bottom
+        {
             self.ball.velocity[0] *= -1.0;
             self.returns[1] += 1;
         }
