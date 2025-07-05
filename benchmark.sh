@@ -5,53 +5,57 @@
 
 set -e
 
-# Rust build and benchmarks
-cd rust
+# --- Configuration ---
+GENERATIONS=10
+RUST_BIN="rust/target/release/pong"
+CPP_DIR="C++"
+CPP_BIN_NAME="pong_evolution"
+CPP_BIN_PATH="$CPP_DIR/$CPP_BIN_NAME"
 
-echo "Building Rust project..."
-cargo build --release
+# --- Rust Build & Benchmarks ---
+echo "--- Building Rust Project ---"
+(cd rust && cargo build --release)
+echo ""
 
 # Engines to benchmark (match CLI args)
-ENGINES=(stack simd heap gpu)
+# Added 'concurrent' to the list
+ENGINES=(stack simd heap gpu concurrent)
 
+echo "--- Benchmarking Rust Engines (Generations: $GENERATIONS) ---"
 for engine in "${ENGINES[@]}"; do
     echo "Benchmarking Rust engine: $engine"
-    hyperfine -w 2 -r 10 "target/release/pong --nogui --engine $engine --generations 10"
+    hyperfine -w 2 -r 10 "$RUST_BIN --nogui --engine $engine --generations $GENERATIONS"
 done
+echo ""
 
-cd ..
 
-# C++ build and benchmark
-cd "C++"
-
-if [ -f Makefile ]; then
+# --- C++ Build & Benchmark ---
+echo "--- Building C++ Project ---"
+if [ -f "$CPP_DIR/Makefile" ]; then
     echo "Building C++ project with make..."
-    make
-elif [ -f build.sh ]; then
-    echo "Building C++ project with build.sh..."
-    ./build.sh
-else
-    echo "No build script found for C++ project. Please build manually."
-fi
+    make -C "$CPP_DIR"
 
-CPP_BIN="./pong"
-if [ ! -f "$CPP_BIN" ]; then
-    echo "C++ binary not found at $CPP_BIN. Please adjust the script."
+elif [ -f "$CPP_DIR/build.sh" ]; then
+    echo "Building C++ project with build.sh..."
+    (cd "$CPP_DIR" && ./build.sh)
+else
+    echo "No build script or Makefile found for C++ project. Please build manually."
+    # Exit gracefully if no build method is found
+    exit 0
+fi
+echo ""
+
+if [ ! -f "$CPP_BIN_PATH" ]; then
+    echo "C++ binary not found at $CPP_BIN_PATH after build attempt."
     exit 1
 fi
 
 # Benchmark C++ implementation
-# The C++ version accepts the number of generations as an argument (default 100)
-# For fair benchmarking, we use 10 generations (like Rust)
-echo "Benchmarking C++ implementation..."
-if [ -f "C++/pong_evolution" ]; then
-    hyperfine --warmup 1 "C++/pong_evolution 10"
-else
-    echo "C++ binary not found. Please build C++/pong_evolution manually."
-fi
+echo "--- Benchmarking C++ Implementation (Generations: $GENERATIONS) ---"
+hyperfine -w 2 -r 10 "$CPP_BIN_PATH $GENERATIONS"
 
-# Note: The C++ output net format (fittest.log) is not directly compatible with Rust, but a parser could be written to convert it for cross-evaluation in the future.
+# Note: The C++ output net format (fittest.log) is not directly compatible with Rust,
+# but a parser could be written to convert it for cross-evaluation in the future.
 
-cd ..
-
+echo ""
 echo "Benchmarking complete."

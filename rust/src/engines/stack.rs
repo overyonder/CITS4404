@@ -1,12 +1,27 @@
-use crate::config::EvolutionConfig;
-use crate::constants::*;
-use crate::traits::Individual;
-use rand::Rng;
-use rand_distr::{Distribution, Normal};
+//! A neural network engine where all weights are stored in a single, stack-allocated array.
 
-/// An individual represented by weights stored on the stack.
-#[derive(Clone, Copy)]
+use crate::{config::Activation, constants::*, traits::Individual, utils};
+use rand::Rng;
+
+/// A neural network individual using a stack-allocated, fixed-size array for its weights.
+///
+/// # Memory Layout
+/// All weights (`TOTAL_WEIGHTS`) are stored in a single `[f32; N]` array directly within the struct.
+/// When a `StackIndividual` is created, it resides entirely on the call stack.
+///
+/// # Performance
+/// - **Pros**: Extremely fast. No heap allocation means no overhead from the system allocator.
+///   Excellent cache locality, as all weights are contiguous in memory.
+/// - **Cons**: The size of the network is fixed at compile time and is limited by the stack size,
+///   which is typically much smaller than the heap.
+///
+/// # Teaching Note
+/// This struct is a perfect example of leveraging the stack for performance. It's the most
+/// efficient implementation possible for a network of this size, but it lacks the flexibility
+/// of heap-based approaches for larger, dynamically-sized networks.
+#[derive(Clone, Copy, Debug)]
 pub struct StackIndividual {
+    /// All weights for the network, stored contiguously on the stack.
     pub weights: [f32; TOTAL_WEIGHTS],
 }
 
@@ -15,7 +30,21 @@ impl Individual for StackIndividual {
         "Stack"
     }
 
-    fn forward(&self, input: &[f32; INPUT_SIZE], _config: &EvolutionConfig) -> [f32; OUTPUT_SIZE] {
+    /// Performs a forward pass using manually sliced portions of the flat weight array.
+    ///
+    /// # Algorithm
+    /// 1.  The flat `weights` array is split into chunks for each layer.
+    /// 2.  For each neuron in a layer, its inputs are multiplied by their corresponding weights.
+    /// 3.  The weighted sum is added to a bias term.
+    /// 4.  The result is passed through an activation function.
+    /// 5.  The output of one layer becomes the input for the next.
+    ///
+    /// # Teaching Note
+    /// This is a manual implementation of matrix multiplication. It demonstrates how a neural
+    /// network, often visualized as interconnected layers, is actually implemented under the
+    /// hood using flat arrays and loops. Understanding this mapping is key to creating
+    /// efficient neural network engines.
+    fn forward_propagate(&self, input: &[f32; INPUT_SIZE], activation: Activation) -> [f32; OUTPUT_SIZE] {
         let mut l1_outputs = [0.0; HIDDEN1_SIZE];
         let mut l2_outputs = [0.0; HIDDEN2_SIZE];
         let mut output = [0.0; OUTPUT_SIZE];
@@ -29,7 +58,8 @@ impl Individual for StackIndividual {
             let end = start + INPUT_SIZE;
             let weights_slice = &l1_weights[start..end];
             let bias = l1_weights[end];
-            l1_outputs[i] = (dot(input, weights_slice) + bias).tanh();
+            let sum = utils::dot(input, weights_slice) + bias;
+            l1_outputs[i] = utils::apply_activation(sum, activation);
         }
 
         // Layer 2: Hidden 1 -> Hidden 2
@@ -38,16 +68,17 @@ impl Individual for StackIndividual {
             let end = start + HIDDEN1_SIZE;
             let weights_slice = &l2_weights[start..end];
             let bias = l2_weights[end];
-            l2_outputs[i] = (dot(&l1_outputs, weights_slice) + bias).tanh();
+            let sum = utils::dot(&l1_outputs, weights_slice) + bias;
+            l2_outputs[i] = utils::apply_activation(sum, activation);
         }
 
-        // Layer 3: Hidden 2 -> Output
+        // Layer 3: Hidden 2 -> Output (No activation on the output layer)
         for i in 0..OUTPUT_SIZE {
             let start = i * (HIDDEN2_SIZE + 1);
             let end = start + HIDDEN2_SIZE;
             let weights_slice = &l3_weights[start..end];
             let bias = l3_weights[end];
-            output[i] = dot(&l2_outputs, weights_slice) + bias;
+            output[i] = utils::dot(&l2_outputs, weights_slice) + bias;
         }
 
         output
@@ -57,32 +88,13 @@ impl Individual for StackIndividual {
         &self.weights
     }
 
-    fn recombine_from<R: Rng>(
-        &mut self,
-        p1: &Self,
-        p2: &Self,
-        rng: &mut R,
-        config: &EvolutionConfig,
-    ) {
-        let normal = Normal::new(0.0, config.mutation_strength).unwrap();
-        for i in 0..TOTAL_WEIGHTS {
-            // Crossover
-            self.weights[i] = if rng.gen::<bool>() { p1.weights[i] } else { p2.weights[i] };
-
-            // Mutation
-            if rng.gen::<f32>() < config.mutation_rate {
-                self.weights[i] += normal.sample(rng);
-            }
-        }
+    fn weights_as_mut_slice(&mut self) -> &mut [f32] {
+        &mut self.weights
     }
 }
 
-/// Computes the dot product of two slices.
-fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
 impl Default for StackIndividual {
+    /// Creates a `StackIndividual` with weights initialized to random values in `[-1, 1]`.
     fn default() -> Self {
         let mut weights = [0.0; TOTAL_WEIGHTS];
         let mut rng = rand::thread_rng();

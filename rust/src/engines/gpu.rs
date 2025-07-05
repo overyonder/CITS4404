@@ -1,6 +1,9 @@
-use crate::config::EvolutionConfig;
+//! A neural network engine that leverages the GPU for massively parallel computation.
+
+use crate::config::{Activation, EvolutionConfig};
 use crate::{constants::*, traits::Individual};
 
+use bytemuck::{Pod, Zeroable};
 use once_cell::sync::Lazy;
 use pollster::block_on;
 use rand::Rng;
@@ -12,44 +15,101 @@ use std::{
 };
 use wgpu::util::DeviceExt;
 
-// A global, lazily-initialized GPU context.
+// A global, lazily-initialized GPU context, shared across all GpuIndividuals.
 static GPU_CONTEXT: Lazy<GpuContext> = Lazy::new(GpuContext::new);
 
 /// Holds the WGPU device, queue, and the pre-compiled compute pipeline.
+///
+/// # Teaching Note
+/// This struct encapsulates the boilerplate `wgpu` setup. By creating it once with `Lazy`,
+/// we avoid the high cost of initializing the GPU for every single `GpuIndividual`.
 struct GpuContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
 }
 
+/// Uniform data passed from the CPU to the GPU shader.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuConfig {
+    /// 0: Tanh, 1: ReLU, 2: Atan, 3: Linear
+    activation_type: u32,
+}
+
 impl GpuContext {
     fn new() -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .expect("Failed to find an appropriate adapter");
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("Failed to find an appropriate adapter");
 
-        let (device, queue) = block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-            },
-            None,
-        ))
-        .expect("Failed to get device");
+        let (device, queue) = block_on(adapter.request_device(&Default::default(), None))
+            .expect("Failed to get device");
 
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Forward Pass Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/forward.wgsl").into()),
         });
 
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Forward Pass Pipeline Layout"),
+            bind_group_layouts: &[&device.create_bind_group_layout(
+                &wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Bind Group Layout"),
+                    entries: &[
+                        // input buffer
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // weights buffer
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // output buffer
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // config uniform
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                },
+            )],
+            push_constant_ranges: &[],
+        });
+
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Forward Pass Pipeline"),
-            layout: None, // Inferred from shader
+            layout: Some(&pipeline_layout),
             module: &shader_module,
             entry_point: "main",
         });
@@ -62,13 +122,22 @@ impl GpuContext {
     }
 }
 
-/// An individual whose weights are stored and processed on the GPU.
+/// An individual whose neural network weights are stored and processed on the GPU.
+///
+/// # Memory and Performance
+/// - Weights are held in a `wgpu::Buffer` on the GPU for fast access by compute shaders.
+/// - The `forward_propagate` method is extremely fast as it dispatches a shader and doesn't
+///   block or transfer data back to the CPU.
+/// - Genetic operations (`crossover`, `mutate`) are currently a performance bottleneck.
+///   They transfer weights back to the CPU, perform the logic, and transfer them back.
+///   This is a candidate for a future optimization using a dedicated compute shader.
 pub struct GpuIndividual {
     weights_buffer: Arc<wgpu::Buffer>,
     context: &'static GpuContext,
 }
 
 impl Clone for GpuIndividual {
+    /// Creates a deep copy of the individual by copying the GPU buffer.
     fn clone(&self) -> Self {
         let new_buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Cloned Weights Buffer"),
@@ -106,26 +175,47 @@ impl Individual for GpuIndividual {
         "GPU"
     }
 
-    fn forward(&self, input: &[f32; INPUT_SIZE], _config: &EvolutionConfig) -> [f32; OUTPUT_SIZE] {
+    /// Performs a forward pass on the GPU using a compute shader.
+    fn forward_propagate(
+        &self,
+        input: &[f32; INPUT_SIZE],
+        activation: Activation,
+    ) -> [f32; OUTPUT_SIZE] {
         let device = &self.context.device;
         let queue = &self.context.queue;
 
+        // Create buffers for input, output, and config
         let input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Input Buffer"),
             contents: bytemuck::cast_slice(input),
             usage: wgpu::BufferUsages::STORAGE,
         });
-
+        let output_buffer_size = (OUTPUT_SIZE * std::mem::size_of::<f32>()) as u64;
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Output Buffer"),
-            size: (OUTPUT_SIZE * std::mem::size_of::<f32>()) as u64,
+            size: output_buffer_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
+        let config_data = GpuConfig {
+            activation_type: match activation {
+                Activation::Tanh => 0,
+                Activation::Relu => 1,
+                Activation::Atan => 2,
+                Activation::Linear => 3,
+            },
+        };
+        let config_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Config Buffer"),
+            contents: bytemuck::bytes_of(&config_data),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
+        // Create a bind group to link buffers to shader bindings
+        let bind_group_layout = self.context.pipeline.get_bind_group_layout(0);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Bind Group"),
-            layout: &self.context.pipeline.get_bind_group_layout(0),
+            layout: &bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -139,85 +229,86 @@ impl Individual for GpuIndividual {
                     binding: 2,
                     resource: output_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: config_buffer.as_entire_binding(),
+                },
             ],
         });
 
+        // Dispatch the compute shader
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
-            });
-            cpass.set_pipeline(&self.context.pipeline);
-            cpass.set_bind_group(0, &bind_group, &[]);
-            cpass.dispatch_workgroups(1, 1, 1);
-        }
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
+        cpass.set_pipeline(&self.context.pipeline);
+        cpass.set_bind_group(0, &bind_group, &[]);
+        cpass.dispatch_workgroups(1, 1, 1);
+        drop(cpass);
 
+        // Create a staging buffer to read the output back to the CPU
         let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output Staging Buffer"),
-            size: output_buffer.size(),
+            label: Some("Staging Buffer"),
+            size: output_buffer_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging_buffer, 0, output_buffer.size());
+        encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging_buffer, 0, output_buffer_size);
         queue.submit(Some(encoder.finish()));
 
-        let buffer_slice = staging_buffer.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
-            sender.send(v).unwrap();
-        });
-        device.poll(wgpu::Maintain::Wait);
-
+        // Read the result from the staging buffer
         let mut output = [0.0; OUTPUT_SIZE];
-        if let Ok(Ok(())) = receiver.recv() {
-            let data = buffer_slice.get_mapped_range();
-            let floats: &[f32] = bytemuck::cast_slice(&data);
+        read_buffer_sync(&staging_buffer, |buffer_slice| {
+            let floats: &[f32] = bytemuck::cast_slice(buffer_slice);
             output.copy_from_slice(&floats[..OUTPUT_SIZE]);
-            drop(data);
-            staging_buffer.unmap();
-        } else {
-            panic!("Failed to read GPU output");
-        }
+        });
 
         output
     }
 
-    fn recombine_from<R: Rng>(
-        &mut self,
-        p1: &Self,
-        p2: &Self,
-        rng: &mut R,
-        config: &EvolutionConfig,
-    ) {
-        // FIXME: This is a major performance bottleneck. The recombination logic should
-        // be implemented in a compute shader to avoid transferring data between the CPU
-        // and GPU.
+    /// # Performance Note
+    /// This is a major performance bottleneck. Crossover is performed on the CPU, requiring
+    /// a full data transfer from two GPU individuals and a subsequent transfer back to the new child.
+    /// This should be implemented in a dedicated compute shader.
+    fn crossover<R: Rng>(&self, other: &Self, rng: &mut R) -> Self {
+        let p1_weights = self.get_weights_from_gpu();
+        let p2_weights = other.get_weights_from_gpu();
+        let mut child_weights = vec![0.0; TOTAL_WEIGHTS];
 
-        let p1_weights = p1.get_weights_from_gpu();
-        let p2_weights = p2.get_weights_from_gpu();
-        let mut new_weights = vec![0.0; TOTAL_WEIGHTS];
-
-        let normal = Normal::new(0.0, config.mutation_strength).unwrap();
         for i in 0..TOTAL_WEIGHTS {
-            new_weights[i] = if rng.gen() {
+            child_weights[i] = if rng.gen() {
                 p1_weights[i]
             } else {
                 p2_weights[i]
             };
+        }
+
+        GpuIndividual::from_weights(&child_weights)
+    }
+
+    /// # Performance Note
+    /// Like crossover, this is a performance bottleneck due to the GPU-CPU data transfer.
+    /// This should be implemented in a compute shader for efficiency.
+    fn mutate<R: Rng>(&mut self, rng: &mut R, config: &EvolutionConfig) {
+        let mut weights = self.get_weights_from_gpu();
+        let normal = Normal::new(0.0, config.mutation_strength).unwrap();
+
+        for i in 0..TOTAL_WEIGHTS {
             if rng.gen::<f32>() < config.mutation_rate {
-                new_weights[i] += normal.sample(rng);
+                weights[i] += normal.sample(rng);
             }
         }
-        self.set_weights_on_gpu(&new_weights);
+        self.set_weights_on_gpu(&weights);
     }
 
     fn weights_as_slice(&self) -> &[f32] {
-        unimplemented!(
-            "Getting a direct slice from GPU memory is not efficient. Override save/load."
-        );
+        panic!("Getting a direct slice from GPU memory is not feasible. Use `save` or `get_weights_from_gpu`.");
+    }
+
+    fn weights_as_mut_slice(&mut self) -> &mut [f32] {
+        panic!("Getting a direct mutable slice from GPU memory is not feasible.");
     }
 
     fn save(&self, path: &str) -> io::Result<()> {
@@ -265,37 +356,50 @@ impl GpuIndividual {
     }
 
     fn get_weights_from_gpu(&self) -> Vec<f32> {
-        let device = &self.context.device;
-        let queue = &self.context.queue;
-        let buffer = &self.weights_buffer;
-
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let staging_buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Weights Staging Buffer"),
-            size: buffer.size(),
+            size: self.weights_buffer.size(),
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(buffer, 0, &staging_buffer, 0, buffer.size());
-        queue.submit(Some(encoder.finish()));
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_buffer_to_buffer(
+            &self.weights_buffer,
+            0,
+            &staging_buffer,
+            0,
+            self.weights_buffer.size(),
+        );
+        self.context.queue.submit(Some(encoder.finish()));
 
-        let buffer_slice = staging_buffer.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
-            sender.send(v).unwrap();
+        let mut result = Vec::new();
+        read_buffer_sync(&staging_buffer, |buffer_slice| {
+            result = bytemuck::cast_slice::<u8, f32>(buffer_slice).to_vec();
         });
-        device.poll(wgpu::Maintain::Wait);
+        result
+    }
+}
 
-        if let Ok(Ok(())) = receiver.recv() {
-            let data = buffer_slice.get_mapped_range();
-            let result = bytemuck::cast_slice::<u8, f32>(&data).to_vec();
-            drop(data);
-            staging_buffer.unmap();
-            result
-        } else {
-            panic!("Failed to read weights from GPU");
-        }
+/// Helper function to synchronously read data from a wgpu buffer.
+fn read_buffer_sync(buffer: &wgpu::Buffer, mut callback: impl FnMut(&[u8])) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let buffer_slice = buffer.slice(..);
+
+    buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+        sender.send(v).unwrap();
+    });
+    GPU_CONTEXT.device.poll(wgpu::Maintain::Wait);
+
+    if let Ok(Ok(())) = receiver.recv() {
+        let data = buffer_slice.get_mapped_range();
+        callback(&data);
+        drop(data);
+        buffer.unmap();
+    } else {
+        panic!("Failed to read data from GPU buffer");
     }
 }

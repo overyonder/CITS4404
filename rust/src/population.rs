@@ -1,48 +1,53 @@
-use crate::{
-    config::EvolutionConfig, constants::*, gamestate::GameState, traits::Individual,
-};
+use crate::{config::EvolutionConfig, gamestate::GameState, traits::Individual};
 use rand::prelude::*;
 use rayon::prelude::*;
-use std::{
-    array,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Represents a population of individuals (neural networks) for evolutionary training.
 ///
-/// # Memory Layout
-/// - `individuals`: Fixed-size array allocated on the stack (if `I` is stack-allocated, e.g., StackIndividual),
-///   otherwise heap for large types (e.g., HeapIndividual).
-/// - `fitness`: Array of atomic integers, allowing concurrent fitness updates in parallel engines.
-/// - `config`: Evolutionary parameters (mutation rate, elite count, etc.).
+/// # Fields
+/// - `individuals`: A vector containing the population of neural networks (genomes).
+/// - `fitness`: A vector of atomic integers for fitness scores, allowing concurrent updates.
+/// - `config`: The configuration for the evolutionary process.
 ///
 /// # Algorithm
-/// Each generation:
-/// 1. Evaluate all individuals (tournament, round-robin)
-/// 2. Select elites (top performers)
-/// 3. Fill next generation with crossovers and mutations
-/// 4. Repeat for a fixed number of generations
+/// Each generation, the population undergoes:
+/// 1. **Evaluation**: All individuals compete in a round-robin tournament to determine fitness.
+/// 2. **Selection**: The best-performing individuals (elites) are identified.
+/// 3. **Reproduction**: The rest of the population is replaced by offspring created
+///    through crossover and mutation of the elites.
+/// This cycle repeats for a configured number of generations.
+///
+/// # Memory
+/// - Individuals and fitness scores are stored on the heap in `Vec`s, allowing for
+///   a dynamically configurable population size.
+///
+/// # Teaching Note
+/// This struct is a good example of managing a collection of evolving agents.
+/// Using a `Vec` instead of a fixed-size array makes the genetic algorithm more
+/// flexible, as the population size can be changed at runtime via configuration.
 pub struct Population<I: Individual> {
     /// The population of neural networks (genomes).
-    pub individuals: [I; POPULATION_SIZE],
-    /// Fitness scores for each individual (updated in parallel-safe way).
-    fitness: [AtomicU32; POPULATION_SIZE],
+    pub individuals: Vec<I>,
+    /// Fitness scores for each individual (updated in a parallel-safe way).
+    pub fitness: Vec<AtomicU32>,
     /// Evolutionary parameters.
-    config: EvolutionConfig,
+    pub config: EvolutionConfig,
 }
 
 impl<I: Individual> Population<I> {
     /// Creates a new population based on the provided configuration.
     ///
     /// # Parameters
-    /// - `config`: Evolutionary parameters (population size, mutation rate, etc.)
+    /// - `config`: Evolutionary parameters, including `population_size`.
     ///
     /// # Returns
-    /// New population with randomly initialized individuals and zeroed fitness.
+    /// A new population with randomly initialized individuals and zeroed fitness scores.
     pub fn new(config: EvolutionConfig) -> Self {
+        let pop_size = config.population_size;
         Self {
-            individuals: array::from_fn(|_| I::default()),
-            fitness: array::from_fn(|_| AtomicU32::new(0)),
+            individuals: (0..pop_size).map(|_| I::default()).collect(),
+            fitness: (0..pop_size).map(|_| AtomicU32::new(0)).collect(),
             config,
         }
     }
@@ -51,17 +56,22 @@ impl<I: Individual> Population<I> {
     /// in a round-robin tournament.
     ///
     /// # Algorithm
-    /// For every unique pair of individuals, simulates a game and updates their fitness.
-    /// Fitness is the number of successful returns (paddle-ball hits).
-    /// This is O(n^2) and can be parallelized.
-    fn evaluate_fitness(&mut self) {
+    /// For every unique pair of individuals, a game is simulated. The fitness score
+    /// for each individual is the total number of successful returns (paddle-ball hits)
+    /// they achieve across all games. This is an O(n^2) operation.
+    ///
+    /// # Teaching Note
+    /// This is a common approach for fitness evaluation in competitive co-evolution.
+    /// The fitness of an individual is relative to the performance of others in the
+    /// current population.
+    pub fn evaluate_fitness(&mut self) {
         for fitness in self.fitness.iter() {
             fitness.store(0, Ordering::Relaxed);
         }
         let mut game_state = GameState::new();
 
-        for i in 0..POPULATION_SIZE {
-            for j in (i + 1)..POPULATION_SIZE {
+        for i in 0..self.config.population_size {
+            for j in (i + 1)..self.config.population_size {
                 let (returns_i, returns_j) =
                     game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
                 self.fitness[i].fetch_add(returns_i, Ordering::Relaxed);
@@ -70,100 +80,108 @@ impl<I: Individual> Population<I> {
         }
     }
 
-    /// Parallel version of fitness evaluation using Rayon.
+    /// A parallel version of `evaluate_fitness` using the Rayon crate.
     ///
     /// # Memory/Threading
-    /// - Each thread gets its own `GameState` to avoid mutation races.
-    /// - Fitness is updated atomically.
-    fn evaluate_fitness_concurrent(&mut self) {
+    /// - The outer loop over individuals is parallelized.
+    /// - A new `GameState` is created per thread to prevent data races.
+    /// - Fitness scores are updated atomically using `AtomicU32`.
+    ///
+    /// # Teaching Note
+    /// This demonstrates how CPU-bound tasks like fitness evaluation can be easily
+    /// parallelized in Rust with Rayon, often providing a significant speedup on
+    /// multi-core processors.
+    pub fn evaluate_fitness_concurrent(&mut self) {
         for fitness in self.fitness.iter() {
             fitness.store(0, Ordering::Relaxed);
         }
 
-        let pairs: Vec<(usize, usize)> = (0..POPULATION_SIZE)
-            .flat_map(|i| (i + 1..POPULATION_SIZE).map(move |j| (i, j)))
-            .collect();
-
-        pairs.par_iter().for_each(|&(i, j)| {
-            // Each thread needs its own GameState
-            let mut game_state = GameState::new();
-            let (returns_i, returns_j) =
-                game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
-            self.fitness[i].fetch_add(returns_i, Ordering::Relaxed);
-            self.fitness[j].fetch_add(returns_j, Ordering::Relaxed);
-        });
+        (0..self.config.population_size)
+            .par_bridge()
+            .for_each(|i| {
+                let mut game_state = GameState::new();
+                for j in (i + 1)..self.config.population_size {
+                    let (returns_i, returns_j) = game_state.simulate(
+                        &self.individuals[i],
+                        &self.individuals[j],
+                        &self.config,
+                    );
+                    self.fitness[i].fetch_add(returns_i, Ordering::Relaxed);
+                    self.fitness[j].fetch_add(returns_j, Ordering::Relaxed);
+                }
+            });
     }
 
-    /// Selects the fittest individuals and returns an array of their indices sorted by fitness.
+    /// Selects the fittest individuals and returns their indices, sorted by fitness.
     ///
-    /// # Algorithm
-    /// Sorts indices by fitness descending. Elites are the first `elite_count` indices.
+    /// # Returns
+    /// A `Vec<usize>` of indices, sorted from highest fitness to lowest.
     ///
-    /// # Parameters
-    /// - `elite_count` (from config): Controls how many top individuals survive unchanged.
-    fn select_elites(&self) -> [usize; POPULATION_SIZE] {
-        let mut indices: [usize; POPULATION_SIZE] = array::from_fn(|i| i);
-        // Sort by fitness in descending order.
-        indices.sort_unstable_by(|&a, &b| {
-            self.fitness[b]
-                .load(Ordering::Relaxed)
-                .cmp(&self.fitness[a].load(Ordering::Relaxed))
-        });
+    /// # Teaching Note
+    /// This is the "selection" phase of a genetic algorithm. The sorted list of
+    /// elites is used in the next step to produce the next generation.
+    pub fn select_elites(&self) -> Vec<usize> {
+        let mut indices: Vec<usize> = (0..self.config.population_size).collect();
+        // Sort by fitness descending. `std::cmp::Reverse` is a convenient wrapper
+        // to reverse the sorting order.
+        indices.sort_by_key(|&i| std::cmp::Reverse(self.fitness[i].load(Ordering::Relaxed)));
         indices
     }
 
     /// Fills the next generation with offspring from elites, using crossover and mutation.
     ///
     /// # Algorithm
-    /// - For each non-elite individual:
-    ///   1. Select two random parents from elites.
-    ///   2. Perform crossover to create a child genome.
-    ///   3. Mutate the child genome (with probability/magnitude from config).
-    ///   4. Replace the non-elite with the new child.
+    /// The top `elite_count` individuals survive unchanged. The remaining individuals
+    /// in the population are replaced by new offspring. Each new child is created by:
+    ///   1. Selecting two random parents from the elites.
+    ///   2. Performing crossover to create a child genome.
+    ///   3. Mutating the child's genome based on `mutation_rate` and `mutation_strength`.
     ///
-    /// # Parameters
-    /// - `mutation_rate`/`mutation_strength`: Control how much and how often genes are mutated.
-    /// - `elite_count`: Number of survivors per generation.
-    fn recombination_and_mutation(&mut self, sorted_indices: &[usize; POPULATION_SIZE]) {
+    /// # Teaching Note
+    /// This function implements the "crossover" and "mutation" phases. Elitism ensures
+    /// that the best solutions are never lost from one generation to the next.
+    pub fn recombination_and_mutation(&mut self, sorted_indices: &[usize]) {
         let mut rng = thread_rng();
+        let elite_count = self.config.elite_count;
+        let population_size = self.config.population_size;
 
-        // The first `ELITE_COUNT` indices point to the elites who will be parents.
-        let elite_parent_indices = &sorted_indices[0..ELITE_COUNT];
+        // The first `elite_count` indices point to the elites who will be parents.
+        let elite_parent_indices = &sorted_indices[0..elite_count];
 
         // The remaining indices point to non-elites that will be replaced.
-        for i in ELITE_COUNT..POPULATION_SIZE {
+        for i in elite_count..population_size {
             let individual_to_replace_idx = sorted_indices[i];
 
             // Select two random elite parents.
             let p1_idx = *elite_parent_indices.choose(&mut rng).unwrap();
             let p2_idx = *elite_parent_indices.choose(&mut rng).unwrap();
 
-            let p1 = self.individuals[p1_idx].clone();
-            let p2 = self.individuals[p2_idx].clone();
+            let p1 = &self.individuals[p1_idx];
+            let p2 = &self.individuals[p2_idx];
 
-            // Recombine and mutate in-place.
-            self.individuals[individual_to_replace_idx].recombine_from(
-                &p1,
-                &p2,
-                &mut rng,
-                &self.config,
-            );
+            // Create a new child through crossover and then mutate it.
+            let mut child = p1.crossover(p2, &mut rng);
+            child.mutate(&mut rng, &self.config);
+
+            // Replace the old individual with the new child.
+            self.individuals[individual_to_replace_idx] = child;
         }
     }
 
     /// Runs the complete evolutionary process for a specified number of generations.
     ///
     /// # Algorithm
+    /// This is the main loop of the genetic algorithm:
     /// 1. For each generation:
-    ///    - Evaluate all individuals (fitness)
-    ///    - Select elites
-    ///    - Fill next generation with crossovers/mutations
-    ///    - Print progress statistics
-    /// 2. After final generation, save the best genome to disk.
+    ///    - Evaluate all individuals to get their fitness.
+    ///    - Select the elites.
+    ///    - Fill the next generation with offspring via crossover and mutation.
+    ///    - Print progress statistics for the generation.
+    /// 2. After the final generation, save the best-performing genome to a file.
     ///
-    /// # Parameters
-    /// - `generations`: Number of generations to run
-    /// - `concurrent`: If true, enables parallel fitness evaluation
+    /// # Teaching Note
+    /// This function ties all the pieces of the genetic algorithm together. It shows
+    /// the high-level cycle of evaluation, selection, and reproduction.
     pub fn evolve(&mut self) {
         println!("Starting evolution...");
         for gen in 0..self.config.generations {
@@ -176,10 +194,11 @@ impl<I: Individual> Population<I> {
             let sorted_indices = self.select_elites();
 
             let best_fitness = self.fitness[sorted_indices[0]].load(Ordering::Relaxed);
-            let worst_fitness = self.fitness[sorted_indices[POPULATION_SIZE - 1]].load(Ordering::Relaxed);
-            let average_fitness = self.fitness.iter().map(|f| f.load(Ordering::Relaxed)).sum::<u32>()
-                as f32
-                / POPULATION_SIZE as f32;
+            let worst_fitness =
+                self.fitness[sorted_indices[self.config.population_size - 1]].load(Ordering::Relaxed);
+            let average_fitness =
+                self.fitness.iter().map(|f| f.load(Ordering::Relaxed)).sum::<u32>() as f32
+                    / self.config.population_size as f32;
 
             println!(
                 "Gen {:<3} | Best: {:<5} | Avg: {:<7.2} | Worst: {}",

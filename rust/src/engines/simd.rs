@@ -1,41 +1,64 @@
-use crate::{config::EvolutionConfig, constants::*, traits::Individual};
-use rand::Rng;
-use rand_distr::{Distribution, Normal};
+//! A neural network engine that uses SIMD (Single Instruction, Multiple Data) for acceleration.
 
+use crate::{config::Activation, constants::*, traits::Individual, utils};
+use rand::Rng;
+
+// Use architecture-specific intrinsics for x86_64.
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-/// An individual represented by weights stored on the stack, optimized with SIMD.
-#[derive(Clone, Copy)]
+/// A neural network individual that uses SIMD instructions for an optimized forward pass.
+///
+/// # Memory Layout
+/// Like `StackIndividual`, this struct stores all weights in a single, stack-allocated array
+/// to ensure cache-friendliness and avoid heap allocations.
+///
+/// # Performance
+/// The key difference is the use of SIMD intrinsics (specifically AVX2 and FMA) for the
+/// dot product calculation, which is the most computationally intensive part of the forward pass.
+/// This allows the CPU to perform multiple floating-point multiplications and additions in a
+/// single instruction, offering a significant speedup over the scalar `StackIndividual`.
+///
+/// # Teaching Note
+/// This is a great example of performance optimization via architecture-specific features.
+/// The use of `#[cfg]` and `#[target_feature]` allows the code to compile on any platform,
+/// but it will only use the SIMD optimizations when targeting a compatible `x86_64` CPU.
+#[derive(Clone, Copy, Debug)]
 pub struct SimdIndividual {
     pub weights: [f32; TOTAL_WEIGHTS],
 }
 
-// SIMD dot product. This function is unsafe because it uses CPU intrinsics.
-// It also requires the target CPU to support AVX2 and FMA.
+/// Performs a dot product using AVX2 and FMA intrinsics for high performance.
+///
+/// # Safety
+/// This function is `unsafe` because it directly calls CPU intrinsics that are not
+/// guaranteed to be available on all hardware. The `#[target_feature]` attribute ensures
+/// the compiler only generates this code when AVX2 and FMA are enabled, but the call
+/// itself remains `unsafe` to signal this dependency to the programmer.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 unsafe fn dot_simd(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
-    assert_eq!(len, b.len());
+    assert_eq!(len, b.len(), "Slices must have the same length for dot product.");
 
     let mut sum_vec = _mm256_setzero_ps();
     let mut i = 0;
 
-    // Process 8 elements at a time
+    // Process 8 floats (256 bits) at a time.
     while i + 7 < len {
         let a_vec = _mm256_loadu_ps(a.as_ptr().add(i));
         let b_vec = _mm256_loadu_ps(b.as_ptr().add(i));
+        // Fused Multiply-Add: sum_vec = (a_vec * b_vec) + sum_vec
         sum_vec = _mm256_fmadd_ps(a_vec, b_vec, sum_vec);
         i += 8;
     }
 
-    // Horizontal sum of the vector
+    // Horizontally sum the elements in the 256-bit vector.
     let mut sum_arr = [0.0f32; 8];
     _mm256_storeu_ps(sum_arr.as_mut_ptr(), sum_vec);
     let mut sum = sum_arr.iter().sum();
 
-    // Handle remaining elements
+    // Handle any remaining elements that didn't fit into a full SIMD vector.
     while i < len {
         sum += a[i] * b[i];
         i += 1;
@@ -44,25 +67,22 @@ unsafe fn dot_simd(a: &[f32], b: &[f32]) -> f32 {
     sum
 }
 
-// Fallback dot product for non-x86_64 architectures.
+/// A fallback scalar dot product for non-x86_64 architectures.
 #[cfg(not(target_arch = "x86_64"))]
 fn dot_simd(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-// This helper function dispatches to the correct dot product implementation.
+/// Dispatches to the correct dot product implementation based on the target architecture.
 #[inline]
 fn dispatch_dot(a: &[f32], b: &[f32]) -> f32 {
+    // On x86_64, call the unsafe SIMD version. On other platforms, use the safe fallback.
     #[cfg(target_arch = "x86_64")]
-    {
-        // This is unsafe because we are calling a function with SIMD intrinsics
-        // which requires the CPU to support AVX2 and FMA.
-        // We have enabled this with a target_feature attribute on the function.
-        unsafe { dot_simd(a, b) }
+    unsafe {
+        dot_simd(a, b)
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        // Fallback for non-x86_64 architectures.
         dot_simd(a, b)
     }
 }
@@ -72,7 +92,7 @@ impl Individual for SimdIndividual {
         "SIMD"
     }
 
-    fn forward(&self, input: &[f32; INPUT_SIZE], _config: &EvolutionConfig) -> [f32; OUTPUT_SIZE] {
+    fn forward_propagate(&self, input: &[f32; INPUT_SIZE], activation: Activation) -> [f32; OUTPUT_SIZE] {
         let mut l1_outputs = [0.0; HIDDEN1_SIZE];
         let mut l2_outputs = [0.0; HIDDEN2_SIZE];
         let mut output = [0.0; OUTPUT_SIZE];
@@ -86,7 +106,8 @@ impl Individual for SimdIndividual {
             let end = start + INPUT_SIZE;
             let weights_slice = &l1_weights[start..end];
             let bias = l1_weights[end];
-            l1_outputs[i] = (dispatch_dot(input, weights_slice) + bias).tanh();
+            let sum = dispatch_dot(input, weights_slice) + bias;
+            l1_outputs[i] = utils::apply_activation(sum, activation);
         }
 
         // Layer 2: Hidden 1 -> Hidden 2
@@ -95,10 +116,11 @@ impl Individual for SimdIndividual {
             let end = start + HIDDEN1_SIZE;
             let weights_slice = &l2_weights[start..end];
             let bias = l2_weights[end];
-            l2_outputs[i] = (dispatch_dot(&l1_outputs, weights_slice) + bias).tanh();
+            let sum = dispatch_dot(&l1_outputs, weights_slice) + bias;
+            l2_outputs[i] = utils::apply_activation(sum, activation);
         }
 
-        // Layer 3: Hidden 2 -> Output
+        // Layer 3: Hidden 2 -> Output (No activation on the output layer)
         for i in 0..OUTPUT_SIZE {
             let start = i * (HIDDEN2_SIZE + 1);
             let end = start + HIDDEN2_SIZE;
@@ -114,29 +136,15 @@ impl Individual for SimdIndividual {
         &self.weights
     }
 
-
-    fn recombine_from<R: Rng>(
-        &mut self,
-        p1: &Self,
-        p2: &Self,
-        rng: &mut R,
-        config: &EvolutionConfig,
-    ) {
-        let normal = Normal::new(0.0, config.mutation_strength).unwrap();
-        for i in 0..TOTAL_WEIGHTS {
-            self.weights[i] = if rng.gen::<bool>() {
-                p1.weights[i]
-            } else {
-                p2.weights[i]
-            };
-            if rng.gen::<f32>() < config.mutation_rate {
-                self.weights[i] += normal.sample(rng);
-            }
-        }
+    fn weights_as_mut_slice(&mut self) -> &mut [f32] {
+        &mut self.weights
     }
 }
 
+
+
 impl Default for SimdIndividual {
+    /// Creates a `SimdIndividual` with weights initialized to random values in `[-1, 1]`.
     fn default() -> Self {
         let mut weights = [0.0; TOTAL_WEIGHTS];
         let mut rng = rand::thread_rng();

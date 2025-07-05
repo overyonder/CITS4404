@@ -1,12 +1,18 @@
-use crate::config::EvolutionConfig;
-use crate::constants::*;
-use crate::traits::Individual;
+use crate::{config::Activation, constants::*, traits::Individual, utils};
 use rand::Rng;
-use rand_distr::{Distribution, Normal};
 
 /// An individual represented by weights stored on the heap.
 #[derive(Clone)]
+/// A neural network individual whose weights are stored on the heap (Vec).
+///
+/// # Memory Layout
+/// - All weights are stored in a heap-allocated `Vec<f32>`.
+/// - Allows for flexible, dynamic allocation of weights.
+///
+/// # Teaching Note
+/// - Demonstrates heap allocation and dynamic memory management in Rust.
 pub struct HeapIndividual {
+    /// All weights for the network, stored on the heap.
     pub weights: Vec<f32>,
 }
 
@@ -23,10 +29,10 @@ impl Default for HeapIndividual {
 
 impl Individual for HeapIndividual {
     fn name() -> &'static str {
-        "heap"
+        "Heap"
     }
 
-    fn forward(&self, input: &[f32; INPUT_SIZE], _config: &EvolutionConfig) -> [f32; OUTPUT_SIZE] {
+    fn forward_propagate(&self, input: &[f32; INPUT_SIZE], activation: Activation) -> [f32; OUTPUT_SIZE] {
         let mut l1_outputs = [0.0; HIDDEN1_SIZE];
         let mut l2_outputs = [0.0; HIDDEN2_SIZE];
         let mut output = [0.0; OUTPUT_SIZE];
@@ -40,7 +46,8 @@ impl Individual for HeapIndividual {
             let end = start + INPUT_SIZE;
             let weights_slice = &l1_weights[start..end];
             let bias = l1_weights[end];
-            l1_outputs[i] = (dot(input, weights_slice) + bias).tanh();
+            let sum = utils::dot(input, weights_slice) + bias;
+            l1_outputs[i] = utils::apply_activation(sum, activation);
         }
 
         // Layer 2: Hidden 1 -> Hidden 2
@@ -49,16 +56,17 @@ impl Individual for HeapIndividual {
             let end = start + HIDDEN1_SIZE;
             let weights_slice = &l2_weights[start..end];
             let bias = l2_weights[end];
-            l2_outputs[i] = (dot(&l1_outputs, weights_slice) + bias).tanh();
+            let sum = utils::dot(&l1_outputs, weights_slice) + bias;
+            l2_outputs[i] = utils::apply_activation(sum, activation);
         }
 
-        // Layer 3: Hidden 2 -> Output
+        // Layer 3: Hidden 2 -> Output (No activation on the output layer)
         for i in 0..OUTPUT_SIZE {
             let start = i * (HIDDEN2_SIZE + 1);
             let end = start + HIDDEN2_SIZE;
             let weights_slice = &l3_weights[start..end];
             let bias = l3_weights[end];
-            output[i] = dot(&l2_outputs, weights_slice) + bias;
+            output[i] = utils::dot(&l2_outputs, weights_slice) + bias;
         }
 
         output
@@ -68,32 +76,7 @@ impl Individual for HeapIndividual {
         &self.weights
     }
 
-    fn recombine_from<R: Rng>(
-        &mut self,
-        p1: &Self,
-        p2: &Self,
-        rng: &mut R,
-        config: &EvolutionConfig,
-    ) {
-        let normal = Normal::new(0.0, config.mutation_strength).unwrap();
-        for i in 0..TOTAL_WEIGHTS {
-            // Crossover
-            self.weights[i] = if rng.gen::<bool>() {
-                p1.weights[i]
-            } else {
-                p2.weights[i]
-            };
-
-            // Mutation
-            if rng.gen::<f32>() < config.mutation_rate {
-                self.weights[i] += normal.sample(rng);
-            }
-        }
+    fn weights_as_mut_slice(&mut self) -> &mut [f32] {
+        &mut self.weights
     }
 }
-
-/// Computes the dot product of two slices.
-fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
