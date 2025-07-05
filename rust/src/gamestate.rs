@@ -1,17 +1,47 @@
 // IMPORTANT: Add `rand = "0.8"` to your [dependencies] in Cargo.toml
-use crate::{constants::*, individual::Individual};
+use crate::{constants::*, traits::Individual, config::EvolutionConfig};
 use rand::Rng;
 
+/// Represents the full state of a Pong game simulation.
+///
+/// # Fields
+/// - `paddle1_pos`, `paddle2_pos`: Current positions of the paddles.
+/// - `ball_pos`: Current position of the ball.
+/// - `ball_vel`: Current velocity of the ball.
+/// - `scores`: Current scores for each player.
+/// - `returns`: Number of successful returns for each player.
+///
+/// # Memory
+/// All fields are stack-allocated, small, and copyable for fast simulation.
+///
+/// # Neural Network Mapping
+/// The neural net receives as input:
+/// - Ball position (x, y)
+/// - Ball velocity (x, y)
+/// - Left paddle position, velocity
+/// - Right paddle position, velocity
+///
+/// Output is a single value: move command for the paddle.
 pub struct GameState {
+    /// Current position of the left paddle.
     pub paddle1_pos: f32,
+    /// Current position of the right paddle.
     pub paddle2_pos: f32,
+    /// Current position of the ball.
     pub ball_pos: (f32, f32),
+    /// Current velocity of the ball.
     pub ball_vel: (f32, f32),
+    /// Current scores for each player.
     pub scores: (u8, u8),
-    pub returns: (u32, u32), // Fitness metric: successful ball returns
+    /// Number of successful returns for each player.
+    pub returns: (u32, u32),
 }
 
 impl GameState {
+    /// Creates a new game state with paddles and ball centered, zeroed scores.
+    ///
+    /// # Returns
+    /// New `GameState` ready for simulation.
     pub fn new() -> Self {
         let mut new_state = Self {
             paddle1_pos: (LENGTH / 2) as f32,
@@ -26,6 +56,9 @@ impl GameState {
     }
 
     /// Resets the ball to the center with a random velocity.
+    ///
+    /// # Parameters
+    /// - `right_serves`: Whether the right player serves the ball.
     fn reset_ball(&mut self, right_serves: bool) {
         self.ball_pos = ((WIDTH / 2) as f32, (LENGTH / 2) as f32);
         let mut rng = rand::thread_rng();
@@ -41,13 +74,21 @@ impl GameState {
     }
 
     /// Advances the game state by one tick/frame.
-    pub fn tick(&mut self, left: &Individual, right: &Individual) {
-        self.update_paddles(left, right);
+    ///
+    /// # Parameters
+    /// - `left`, `right`: Individuals (neural nets) controlling each paddle.
+    /// - `config`: Evolutionary/game parameters.
+    pub fn tick<I: Individual>(&mut self, left: &I, right: &I, config: &EvolutionConfig) {
+        self.update_paddles(left, right, config);
         self.update_ball();
     }
 
     /// Update the paddle positions based on neural net outputs.
-    fn update_paddles(&mut self, left: &Individual, right: &Individual) {
+    ///
+    /// # Parameters
+    /// - `left`, `right`: Individuals (neural nets) controlling each paddle.
+    /// - `config`: Evolutionary/game parameters.
+    fn update_paddles<I: Individual>(&mut self, left: &I, right: &I, config: &EvolutionConfig) {
         // --- Left Paddle ---
         let mut left_input = [0.0; INPUT_SIZE];
         left_input[0] = self.ball_pos.0 / WIDTH as f32; // Ball X
@@ -56,8 +97,8 @@ impl GameState {
         left_input[3] = self.ball_vel.1; // Ball Vel Y
         left_input[4] = self.paddle1_pos / LENGTH as f32; // Own paddle Y
         left_input[5] = self.paddle2_pos / LENGTH as f32; // Opponent paddle Y
-        let paddle_out = left.forward(&left_input);
-        let target_vel = paddle_out * PADDLE_MAX_VEL;
+        let paddle_out = left.forward(&left_input, config);
+        let target_vel = paddle_out[0] * PADDLE_MAX_VEL;
         self.paddle1_pos = (self.paddle1_pos + target_vel).clamp(MIN_PADDLE_POS, MAX_PADDLE_POS);
 
         // --- Right Paddle ---
@@ -69,8 +110,8 @@ impl GameState {
         right_input[3] = self.ball_vel.1;
         right_input[4] = self.paddle2_pos / LENGTH as f32; // Own paddle Y
         right_input[5] = self.paddle1_pos / LENGTH as f32; // Opponent paddle Y
-        let paddle_out = right.forward(&right_input);
-        let target_vel = paddle_out * PADDLE_MAX_VEL;
+        let paddle_out = right.forward(&right_input, config);
+        let target_vel = paddle_out[0] * PADDLE_MAX_VEL;
         self.paddle2_pos = (self.paddle2_pos + target_vel).clamp(MIN_PADDLE_POS, MAX_PADDLE_POS);
     }
 
@@ -116,7 +157,22 @@ impl GameState {
 
     /// Run a full simulation episode for two individuals.
     /// Returns the number of successful returns for (left, right).
-    pub fn simulate(&mut self, left: &Individual, right: &Individual) -> (u32, u32) {
+    ///
+    /// # Parameters
+    /// - `left`, `right`: Individuals (neural nets) controlling each paddle.
+    /// - `config`: Evolutionary/game parameters.
+    ///
+    /// # Returns
+    /// Tuple: (returns_left, returns_right) — Number of successful returns for each player.
+    ///
+    /// # Algorithm
+    /// - For each timestep:
+    ///   - Feed current game state to each individual's neural net.
+    ///   - Update paddle velocities/positions per output.
+    ///   - Update ball position, handle collisions (walls, paddles).
+    ///   - Increment scores if ball passes a paddle.
+    ///   - End after max steps or score.
+    pub fn simulate<I: Individual>(&mut self, left: &I, right: &I, config: &EvolutionConfig) -> (u32, u32) {
         self.scores = (0, 0);
         self.returns = (0, 0);
         self.reset_ball(rand::thread_rng().gen());
@@ -126,7 +182,7 @@ impl GameState {
             if self.scores.0 >= MAX_SCORE || self.scores.1 >= MAX_SCORE {
                 break;
             }
-            self.tick(left, right);
+            self.tick(left, right, config);
         }
         self.returns
     }
