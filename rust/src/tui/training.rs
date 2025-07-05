@@ -8,6 +8,7 @@ use crate::{
 use std::{sync::mpsc, thread, time::Instant};
 
 /// Holds the state for the training view.
+#[allow(dead_code)] // Struct is used, but some fields are not yet displayed in the UI.
 pub struct TrainingState {
     pub running: bool,
     pub current_generation: usize,
@@ -39,6 +40,7 @@ impl TrainingState {
 }
 
 /// Messages sent from the training thread to the UI thread.
+#[allow(dead_code)] // The UI doesn't handle all message types or fields yet.
 pub enum TrainingMessage {
     /// Reports progress of the training.
     Progress {

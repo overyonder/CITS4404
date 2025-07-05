@@ -126,51 +126,29 @@ impl GpuContext {
 ///
 /// # Memory and Performance
 /// - Weights are held in a `wgpu::Buffer` on the GPU for fast access by compute shaders.
-/// - The `forward_propagate` method is extremely fast as it dispatches a shader and doesn't
-///   block or transfer data back to the CPU.
-/// - Genetic operations (`crossover`, `mutate`) are currently a performance bottleneck.
-///   They transfer weights back to the CPU, perform the logic, and transfer them back.
-///   This is a candidate for a future optimization using a dedicated compute shader.
-pub struct GpuIndividual {
+/// - A `Vec<f32>` of the weights is also kept on the CPU side to avoid expensive GPU-CPU
+///   data transfers for operations like `crossover` and `mutate`, and to provide
+///   synchronous access for `weights_as_slice`.
+/// - The `forward_propagate` method is extremely fast as it dispatches a shader.
+/// - Genetic operations (`crossover`, `mutate`) are still a performance bottleneck compared
+///   to a full GPU implementation, but are faster than they would be if they had to read
+///   from the GPU every time. This is a candidate for a future optimization using a
+///   dedicated compute shader.
+pub struct GpuIndividual<'a> {
     weights_buffer: Arc<wgpu::Buffer>,
-    context: &'static GpuContext,
+    context: &'a GpuContext,
+    weights: Vec<f32>, // CPU-side cache of weights
 }
 
-impl Clone for GpuIndividual {
-    /// Creates a deep copy of the individual by copying the GPU buffer.
+impl Clone for GpuIndividual<'_> {
+    /// Creates a deep copy of the individual by cloning the CPU-side weights
+    /// and creating a new corresponding GPU buffer.
     fn clone(&self) -> Self {
-        let new_buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Cloned Weights Buffer"),
-            size: self.weights_buffer.size(),
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder =
-            self.context
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Clone Encoder"),
-                });
-        encoder.copy_buffer_to_buffer(
-            &self.weights_buffer,
-            0,
-            &new_buffer,
-            0,
-            self.weights_buffer.size(),
-        );
-        self.context.queue.submit(Some(encoder.finish()));
-
-        Self {
-            weights_buffer: Arc::new(new_buffer),
-            context: self.context,
-        }
+        GpuIndividual::from_weights(&self.weights)
     }
 }
 
-impl Individual for GpuIndividual {
+impl Individual for GpuIndividual<'_> {
     fn name() -> &'static str {
         "GPU"
     }
@@ -269,12 +247,11 @@ impl Individual for GpuIndividual {
     }
 
     /// # Performance Note
-    /// This is a major performance bottleneck. Crossover is performed on the CPU, requiring
-    /// a full data transfer from two GPU individuals and a subsequent transfer back to the new child.
-    /// This should be implemented in a dedicated compute shader.
+    /// Crossover is performed on the CPU using the cached `weights` vector to avoid
+    /// GPU-CPU synchronization. A new child individual is created from the resulting weights.
     fn crossover<R: Rng>(&self, other: &Self, rng: &mut R) -> Self {
-        let p1_weights = self.get_weights_from_gpu();
-        let p2_weights = other.get_weights_from_gpu();
+        let p1_weights = &self.weights;
+        let p2_weights = &other.weights;
         let mut child_weights = vec![0.0; TOTAL_WEIGHTS];
 
         for i in 0..TOTAL_WEIGHTS {
@@ -289,37 +266,43 @@ impl Individual for GpuIndividual {
     }
 
     /// # Performance Note
-    /// Like crossover, this is a performance bottleneck due to the GPU-CPU data transfer.
-    /// This should be implemented in a compute shader for efficiency.
+    /// Mutation is performed on the CPU-cached `weights` vector. After mutation, the
+    /// updated weights are written back to the GPU buffer.
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
-        let mut weights = self.get_weights_from_gpu();
         let normal = Normal::new(0.0, config.mutation_strength).unwrap();
 
         for i in 0..TOTAL_WEIGHTS {
             if rng.gen::<f32>() < config.mutation_rate {
-                weights[i] += normal.sample(rng);
+                self.weights[i] += normal.sample(rng);
             }
         }
-        self.set_weights_on_gpu(&weights);
+        // After mutating the CPU-side cache, update the GPU buffer.
+        // A clone is created here to work around a borrow checker limitation,
+        // avoiding a simultaneous mutable and immutable borrow of `self`.
+        self.set_weights_on_gpu(&self.weights.clone());
     }
 
     fn weights_as_slice(&self) -> &[f32] {
-        panic!("Getting a direct slice from GPU memory is not feasible. Use `save` or `get_weights_from_gpu`.");
+        &self.weights
     }
 
     fn weights_as_mut_slice(&mut self) -> &mut [f32] {
-        panic!("Getting a direct mutable slice from GPU memory is not feasible.");
+        // Note: If this slice is mutated, the caller is responsible for calling
+        // `set_weights_on_gpu` to maintain consistency.
+        // However, in the current implementation, `mutate` is the primary way
+        // weights are changed, and it handles this synchronization itself.
+        &mut self.weights
     }
 
     fn save(&self, path: &str) -> io::Result<()> {
-        let weights = self.get_weights_from_gpu();
         let mut file = fs::File::create(path)?;
-        let weights_bytes: &[u8] = bytemuck::cast_slice(&weights);
+        // Use the CPU-side cache for saving, as it's guaranteed to be in sync.
+        let weights_bytes: &[u8] = bytemuck::cast_slice(&self.weights);
         file.write_all(weights_bytes)
     }
 }
 
-impl Default for GpuIndividual {
+impl Default for GpuIndividual<'_> {
     fn default() -> Self {
         let mut weights = vec![0.0; TOTAL_WEIGHTS];
         let mut rng = rand::thread_rng();
@@ -330,7 +313,10 @@ impl Default for GpuIndividual {
     }
 }
 
-impl GpuIndividual {
+impl<'a> GpuIndividual<'a> {
+    /// Creates a new `GpuIndividual` from a slice of weights.
+    /// This involves creating a GPU buffer and copying the weights to it,
+    /// as well as cloning the weights for the CPU-side cache.
     fn from_weights(weights: &[f32]) -> Self {
         let context = &*GPU_CONTEXT;
         let weights_buffer = context
@@ -346,15 +332,20 @@ impl GpuIndividual {
         Self {
             weights_buffer: Arc::new(weights_buffer),
             context,
+            weights: weights.to_vec(),
         }
     }
 
+    /// Writes the provided weight slice to the GPU buffer.
     fn set_weights_on_gpu(&mut self, weights: &[f32]) {
         self.context
             .queue
             .write_buffer(&self.weights_buffer, 0, bytemuck::cast_slice(weights));
     }
 
+    /// Reads the weights from the GPU buffer back to the CPU.
+    /// Note: This is a synchronous and potentially slow operation.
+    #[allow(dead_code)]
     fn get_weights_from_gpu(&self) -> Vec<f32> {
         let staging_buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Weights Staging Buffer"),

@@ -53,7 +53,7 @@ pub struct App {
     pub simulation: Option<SimulationState>,
     /// The best genome discovered so far, to be used in simulation.
     pub best_genome: Option<Vec<f32>>,
-    pub tab: usize,
+
     pub tx: Option<Sender<crate::tui::training::TrainingMessage>>,
     pub rx: Option<Receiver<crate::tui::training::TrainingMessage>>,
     pub error_message: Option<String>,
@@ -70,7 +70,6 @@ impl App {
             training: None,
             simulation: None,
             best_genome: None,
-            tab: 0,
             tx: None,
             rx: None,
             error_message: None,

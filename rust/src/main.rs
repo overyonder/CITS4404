@@ -10,7 +10,7 @@ mod utils;
 
 use crate::{
     config::{Activation, Config, Engine, FitnessFunc},
-    engines::{HeapIndividual, SimdIndividual, StackIndividual},
+    engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
     population::Population,
     tui::ui::run_app,
 };
@@ -179,7 +179,6 @@ fn main() -> io::Result<()> {
 /// duplication. The `match` statement on `config.engine` is the dispatch point that
 /// selects the concrete type for the generic parameter `T` at compile time.
 fn run_cli(args: Args) {
-
     // The `concurrent` flag is now just a boolean in the config, not part of the engine enum.
     // We parse the engine string directly.
     let engine = match args.engine.as_str() {
@@ -246,7 +245,8 @@ fn run_cli(args: Args) {
             pop.evolve(evolution_callback);
         }
         Engine::Gpu => {
-            println!("GPU engine is not yet supported in CLI mode.");
+            let mut pop: Population<GpuIndividual> = Population::new(config);
+            pop.evolve(evolution_callback);
         }
     }
     println!("Evolution finished.");

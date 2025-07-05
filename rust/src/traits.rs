@@ -5,9 +5,9 @@
 //! in a uniform way.
 
 use crate::config::{Activation, Config};
-use crate::constants::{TOTAL_WEIGHTS, INPUT_SIZE, OUTPUT_SIZE};
+use crate::constants::{INPUT_SIZE, OUTPUT_SIZE, TOTAL_WEIGHTS};
 use rand::Rng;
-use std::io::{Read, Write};
+use std::io::Write;
 
 /// Defines the required behavior for any neural network implementation (an "individual").
 ///
@@ -31,7 +31,11 @@ pub trait Individual: Default + Clone + Send + Sync {
     /// Performs the neural network's forward propagation.
     ///
     /// Takes the game state as input and returns the network's output (e.g., paddle movement).
-    fn forward_propagate(&self, input: &[f32; INPUT_SIZE], activation: Activation) -> [f32; OUTPUT_SIZE];
+    fn forward_propagate(
+        &self,
+        input: &[f32; INPUT_SIZE],
+        activation: Activation,
+    ) -> [f32; OUTPUT_SIZE];
 
     /// Creates a new child individual by performing crossover between two parents.
     ///
@@ -87,7 +91,11 @@ pub trait Individual: Default + Clone + Send + Sync {
     fn save(&self, path: &str) -> std::io::Result<()> {
         let mut file = std::fs::File::create(path)?;
         let weights_slice = self.weights_as_slice();
-        assert_eq!(weights_slice.len(), TOTAL_WEIGHTS, "Weight slice length mismatch.");
+        assert_eq!(
+            weights_slice.len(),
+            TOTAL_WEIGHTS,
+            "Weight slice length mismatch."
+        );
         let weights_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
                 weights_slice.as_ptr() as *const u8,
@@ -95,23 +103,5 @@ pub trait Individual: Default + Clone + Send + Sync {
             )
         };
         file.write_all(weights_bytes)
-    }
-
-    /// Loads an individual's weights from a binary file.
-    ///
-    /// # Safety
-    /// This function also uses an `unsafe` block to read bytes directly into the `f32` weight
-    /// slice. It is the inverse of `save` and is safe for the same reasons.
-    fn load(&mut self, path: &str) -> std::io::Result<()> {
-        let mut file = std::fs::File::open(path)?;
-        let weights_slice = self.weights_as_mut_slice();
-        assert_eq!(weights_slice.len(), TOTAL_WEIGHTS, "Weight slice length mismatch.");
-        let weights_bytes: &mut [u8] = unsafe {
-            std::slice::from_raw_parts_mut(
-                weights_slice.as_mut_ptr() as *mut u8,
-                weights_slice.len() * std::mem::size_of::<f32>(),
-            )
-        };
-        file.read_exact(weights_bytes)
     }
 }
