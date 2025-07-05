@@ -46,6 +46,31 @@ impl fmt::Display for Engine {
     }
 }
 
+/// Selects the fitness function for the evolutionary algorithm.
+///
+/// Each fitness function has different characteristics and rewards different behaviors.
+/// The choice of fitness function is a trade-off between exploration, exploitation, and
+/// convergence speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum FitnessFunc {
+    /// Original C++ fitness function, rewarding survival time and returns.
+    CppEquivalent,
+    /// A balanced approach rewarding returns, with penalties for time.
+    Balanced,
+    /// Rewards performance, winning, and longer rallies.
+    Performance,
+}
+
+impl fmt::Display for FitnessFunc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FitnessFunc::CppEquivalent => write!(f, "C++ Equivalent"),
+            FitnessFunc::Balanced => write!(f, "Balanced"),
+            FitnessFunc::Performance => write!(f, "Performance"),
+        }
+    }
+}
+
 /// Holds all parameters for an evolutionary training session.
 ///
 /// This struct consolidates all settings, making it easy to pass configuration
@@ -58,7 +83,7 @@ impl fmt::Display for Engine {
 /// instantiate a default and modify only the fields they care about, either in code
 /// or through the CLI parser.
 #[derive(Debug, Clone, Copy)]
-pub struct EvolutionConfig {
+pub struct Config {
     /// The neural network engine to use.
     pub engine: Engine,
     /// The activation function for hidden and output layers.
@@ -84,6 +109,8 @@ pub struct EvolutionConfig {
     /// The number of the highest-scoring individuals to carry over to the next generation
     /// without modification. Elitism ensures that the best-found solutions are never lost.
     pub elite_count: usize,
+    /// The fitness function to use for the evolutionary algorithm.
+    pub fitness_func: FitnessFunc,
 }
 
 /// Provides a default, sensible configuration for the evolutionary algorithm.
@@ -92,7 +119,7 @@ pub struct EvolutionConfig {
 /// The `Default` trait is a standard Rust interface for providing a default value for a type.
 /// It's widely used in the ecosystem and makes types easier to work with, especially in
 /// configuration contexts like this one.
-impl Default for EvolutionConfig {
+impl Default for Config {
     fn default() -> Self {
         Self {
             generations: 100,
@@ -103,6 +130,7 @@ impl Default for EvolutionConfig {
             activation: Activation::Tanh,
             population_size: 128,
             elite_count: 2, // Keep the top 2 individuals
+            fitness_func: FitnessFunc::Balanced,
         }
     }
 }

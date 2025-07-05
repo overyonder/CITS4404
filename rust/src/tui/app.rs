@@ -1,5 +1,5 @@
 //! Application state and main loop for the TUI.
-use crate::config::EvolutionConfig;
+use crate::config::Config;
 use crate::tui::{simulation::SimulationState, training::TrainingState};
 
 use ratatui::backend::CrosstermBackend;
@@ -13,6 +13,8 @@ use std::sync::mpsc::{Receiver, Sender};
 pub enum AppState {
     /// The initial view, allowing the user to select a mode.
     MainMenu,
+    /// A view for configuring training parameters before starting.
+    Configuring,
     /// The view for monitoring and managing the evolutionary training process.
     Training,
     /// The view for visualizing a game of Pong with a trained neural network.
@@ -21,6 +23,13 @@ pub enum AppState {
     LoadCppChampion,
     /// A transient state that signals the main loop to terminate.
     Exiting,
+}
+
+/// Holds the state for the configuration editor UI.
+#[derive(Default)]
+pub struct ConfigEditor {
+    /// The index of the currently selected configuration item.
+    pub selected_index: usize,
 }
 
 /// The core application struct that holds all state for the TUI.
@@ -37,8 +46,9 @@ pub enum AppState {
 ///   blocking the UI).
 pub struct App {
     pub state: AppState,
-    pub config: EvolutionConfig,
+    pub config: Config,
     pub main_menu: crate::tui::ui::MainMenu,
+    pub config_editor: ConfigEditor,
     pub training: Option<TrainingState>,
     pub simulation: Option<SimulationState>,
     /// The best genome discovered so far, to be used in simulation.
@@ -54,8 +64,9 @@ impl App {
     pub fn new() -> Self {
         Self {
             state: AppState::MainMenu,
-            config: EvolutionConfig::default(),
+            config: Config::default(),
             main_menu: crate::tui::ui::MainMenu::default(),
+            config_editor: ConfigEditor::default(),
             training: None,
             simulation: None,
             best_genome: None,

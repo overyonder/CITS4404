@@ -1,16 +1,16 @@
 mod config;
 mod constants;
+mod cpp_compat;
 mod engines;
 mod gamestate;
 mod population;
 mod traits;
 mod tui;
-mod cpp_compat;
 mod utils;
 
 use crate::{
-    config::{Activation, Engine, EvolutionConfig},
-    engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
+    config::{Activation, Config, Engine, FitnessFunc},
+    engines::{HeapIndividual, SimdIndividual, StackIndividual},
     population::Population,
     tui::ui::run_app,
 };
@@ -68,31 +68,31 @@ struct Args {
     /// A larger population size increases genetic diversity, which can help avoid premature
     /// convergence to a local optimum. However, it also increases the computational cost of
     /// each generation.
-    #[arg(long)]
-    population_size: Option<usize>,
+    #[arg(long, default_value_t = 128)]
+    population_size: usize,
 
     /// The number of the fittest individuals to carry over to the next generation unchanged.
     ///
     /// Elitism ensures that the best solutions found so far are not lost due to crossover or
     /// mutation. A higher elite count can speed up convergence but may also reduce diversity.
-    #[arg(long)]
-    elite_count: Option<usize>,
+    #[arg(long, default_value_t = 2)]
+    elite_count: usize,
 
     /// The probability (from 0.0 to 1.0) that a gene (weight) will be mutated.
     ///
     /// Mutation introduces new genetic material into the population, preventing stagnation.
     /// A higher mutation rate increases exploration of the search space but can disrupt
     /// good solutions if set too high.
-    #[arg(long)]
-    mutation_rate: Option<f32>,
+    #[arg(long, default_value_t = 0.05)]
+    mutation_rate: f32,
 
     /// The maximum magnitude of a mutation.
     ///
     /// When a gene is mutated, a random value between `-mutation_strength` and `+mutation_strength`
     /// is added to it. A larger strength allows for bigger jumps in the search space, which can
     /// be useful for escaping local optima.
-    #[arg(long)]
-    mutation_strength: Option<f32>,
+    #[arg(long, default_value_t = 0.1)]
+    mutation_strength: f32,
 
     /// The activation function to use in the neural network's hidden layers.
     ///
@@ -104,6 +104,10 @@ struct Args {
     /// - `linear`: No-op, simply passes the value through. Results in a linear model.
     #[arg(long)]
     activation: Option<String>,
+
+    /// The fitness function to use for evolution.
+    #[arg(long, value_enum, default_value_t = Config::default().fitness_func)]
+    fitness_func: FitnessFunc,
 }
 
 /// Application entry point.
@@ -175,6 +179,7 @@ fn main() -> io::Result<()> {
 /// duplication. The `match` statement on `config.engine` is the dispatch point that
 /// selects the concrete type for the generic parameter `T` at compile time.
 fn run_cli(args: Args) {
+
     // The `concurrent` flag is now just a boolean in the config, not part of the engine enum.
     // We parse the engine string directly.
     let engine = match args.engine.as_str() {
@@ -188,25 +193,19 @@ fn run_cli(args: Args) {
         }
     };
 
-    // Build config from CLI arguments, falling back to defaults if not provided.
-    let mut config = EvolutionConfig {
+    // Build config from CLI arguments. Since we now have default values in `Args`,
+    // we can construct the config directly without checking `Option`s.
+    let mut config = Config {
         generations: args.generations,
         engine,
-        concurrent: args.concurrent, // The concurrency flag is set here.
-        ..Default::default()
+        concurrent: args.concurrent,
+        population_size: args.population_size,
+        elite_count: args.elite_count,
+        mutation_rate: args.mutation_rate,
+        mutation_strength: args.mutation_strength,
+        fitness_func: args.fitness_func,
+        ..Default::default() // Use default for activation, which is handled separately
     };
-    if let Some(pop) = args.population_size {
-        config.population_size = pop;
-    }
-    if let Some(elite) = args.elite_count {
-        config.elite_count = elite;
-    }
-    if let Some(mr) = args.mutation_rate {
-        config.mutation_rate = mr;
-    }
-    if let Some(ms) = args.mutation_strength {
-        config.mutation_strength = ms;
-    }
     if let Some(ref act) = args.activation {
         config.activation = match act.to_lowercase().as_str() {
             "tanh" => Activation::Tanh,
@@ -221,33 +220,34 @@ fn run_cli(args: Args) {
     }
 
     // The `Display` trait is used for printing, which is more idiomatic than a custom method.
-    println!(
-        "Running in headless mode with engine: {}",
-        config.engine // No more .to_str()
-    );
+    println!("Running in headless mode with engine: {}", config.engine);
     println!("Configuration: {:#?}", config);
 
-    // Dispatch to the correct population type based on the chosen engine.
-    // The concurrent variants of the enum are gone. The `concurrent` flag in `config`
-    // is used internally by the `evolve` method.
+    let evolution_callback = |gen, best_fitness, avg_fitness, worst_fitness, _genome: &[f32]| {
+        println!(
+            "Gen {:<4}/ {} | Best: {:<5} | Avg: {:<7.2} | Worst: {}",
+            gen, config.generations, best_fitness, avg_fitness, worst_fitness
+        );
+        true // Return true to continue the evolution.
+    };
+
+    println!("Starting evolution...");
     match config.engine {
         Engine::Stack => {
-            let mut population: Population<StackIndividual> = Population::new(config);
-            population.evolve();
-        }
-        Engine::Simd => {
-            let mut population: Population<SimdIndividual> = Population::new(config);
-            population.evolve();
+            let mut pop: Population<StackIndividual> = Population::new(config);
+            pop.evolve(evolution_callback);
         }
         Engine::Heap => {
-            let mut population: Population<HeapIndividual> = Population::new(config);
-            population.evolve();
+            let mut pop: Population<HeapIndividual> = Population::new(config);
+            pop.evolve(evolution_callback);
+        }
+        Engine::Simd => {
+            let mut pop: Population<SimdIndividual> = Population::new(config);
+            pop.evolve(evolution_callback);
         }
         Engine::Gpu => {
-            let mut population: Population<GpuIndividual> = Population::new(config);
-            population.evolve();
+            println!("GPU engine is not yet supported in CLI mode.");
         }
     }
-
-    println!("Headless mode run complete.");
+    println!("Evolution finished.");
 }

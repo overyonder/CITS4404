@@ -1,6 +1,6 @@
 //! A neural network engine that leverages the GPU for massively parallel computation.
 
-use crate::config::{Activation, EvolutionConfig};
+use crate::config::{Activation, Config};
 use crate::{constants::*, traits::Individual};
 
 use bytemuck::{Pod, Zeroable};
@@ -291,7 +291,7 @@ impl Individual for GpuIndividual {
     /// # Performance Note
     /// Like crossover, this is a performance bottleneck due to the GPU-CPU data transfer.
     /// This should be implemented in a compute shader for efficiency.
-    fn mutate<R: Rng>(&mut self, rng: &mut R, config: &EvolutionConfig) {
+    fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
         let mut weights = self.get_weights_from_gpu();
         let normal = Normal::new(0.0, config.mutation_strength).unwrap();
 

@@ -4,7 +4,7 @@
 //! to work with various neural network 'engines' (like stack-based, heap-based, SIMD)
 //! in a uniform way.
 
-use crate::config::{Activation, EvolutionConfig};
+use crate::config::{Activation, Config};
 use crate::constants::{TOTAL_WEIGHTS, INPUT_SIZE, OUTPUT_SIZE};
 use rand::Rng;
 use std::io::{Read, Write};
@@ -61,7 +61,7 @@ pub trait Individual: Default + Clone + Send + Sync {
     /// Mutation introduces new genetic material into the population, preventing stagnation.
     /// This implementation iterates through each weight and, with a small probability
     /// (`mutation_rate`), perturbs the weight by a random amount (`mutation_strength`).
-    fn mutate<R: Rng>(&mut self, rng: &mut R, config: &EvolutionConfig) {
+    fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
         let weights = self.weights_as_mut_slice();
         for i in 0..TOTAL_WEIGHTS {
             if rng.gen::<f32>() < config.mutation_rate {

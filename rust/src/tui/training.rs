@@ -1,11 +1,11 @@
 //! Training state, message passing, and backend logic for evolutionary training in the TUI.
 use crate::{
-    config::{Engine, EvolutionConfig},
+    config::{Config, Engine},
     engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
     population::Population,
     traits::Individual,
 };
-use std::{sync::atomic::Ordering, sync::mpsc::Sender, thread};
+use std::{sync::mpsc, thread, time::Instant};
 
 /// Holds the state for the training view.
 pub struct TrainingState {
@@ -18,10 +18,11 @@ pub struct TrainingState {
     pub engine: Engine,
     pub genome_weights: Vec<f32>,
     pub log: Vec<String>,
+    pub start_time: Instant,
 }
 
 impl TrainingState {
-    pub fn new(config: &EvolutionConfig) -> Self {
+    pub fn new(config: &Config) -> Self {
         Self {
             running: true,
             current_generation: 0,
@@ -32,6 +33,7 @@ impl TrainingState {
             engine: config.engine,
             genome_weights: Vec::new(),
             log: vec!["Starting training...".to_string()],
+            start_time: Instant::now(),
         }
     }
 }
@@ -54,7 +56,7 @@ pub enum TrainingMessage {
 
 /// Spawns a new thread to run the evolutionary algorithm, sending progress
 /// messages back to the main UI thread.
-pub fn evolve_with_progress(config: EvolutionConfig, tx: Sender<TrainingMessage>) {
+pub fn evolve_with_progress(config: Config, tx: mpsc::Sender<TrainingMessage>) {
     thread::spawn(move || {
         // The `concurrent` flag is handled by the evolution logic, not the engine enum.
         match config.engine {
@@ -68,49 +70,33 @@ pub fn evolve_with_progress(config: EvolutionConfig, tx: Sender<TrainingMessage>
 
 /// Generic function to run the evolution loop for a specific `Individual` type.
 fn run_evolution_for_engine<I: Individual + Clone + Send + Sync + 'static>(
-    config: EvolutionConfig,
-    tx: Sender<TrainingMessage>,
+    config: Config,
+    tx: mpsc::Sender<TrainingMessage>,
 ) {
-    let mut pop = Population::<I>::new(config.clone());
+    let mut pop = Population::<I>::new(config);
 
-    for gen in 0..config.generations {
-        if config.concurrent {
-            pop.evaluate_fitness_concurrent();
-        } else {
-            pop.evaluate_fitness();
-        }
+    // Define a callback that sends progress messages back to the UI thread.
+    let evolution_callback = |gen: u32,
+                              best_fitness: u32,
+                              avg_fitness: f32,
+                              worst_fitness: u32,
+                              genome_weights: &[f32]| {
+        let message = TrainingMessage::Progress {
+            generation: gen as usize,
+            best_fitness: best_fitness as f32,
+            avg_fitness,
+            worst_fitness: worst_fitness as f32,
+            genome_weights: genome_weights.to_vec(),
+        };
 
-        let sorted_indices = pop.select_elites();
-        let best_fitness = pop.fitness[sorted_indices[0]].load(Ordering::Relaxed);
-        let worst_fitness =
-            pop.fitness[sorted_indices[config.population_size - 1]].load(Ordering::Relaxed);
-        let avg_fitness = pop
-            .fitness
-            .iter()
-            .map(|f| f.load(Ordering::Relaxed))
-            .sum::<u32>() as f32
-            / config.population_size as f32;
+        // If sending fails, the UI thread has likely closed. We'll stop the evolution
+        // by returning `false`.
+        tx.send(message).is_ok()
+    };
 
-        let best_genome_weights = pop.individuals[sorted_indices[0]]
-            .weights_as_slice()
-            .to_vec();
+    // Run the evolution. The `evolve` function will call our callback each generation.
+    pop.evolve(evolution_callback);
 
-        if tx
-            .send(TrainingMessage::Progress {
-                generation: gen as usize,
-                best_fitness: best_fitness as f32,
-                avg_fitness,
-                worst_fitness: worst_fitness as f32,
-                genome_weights: best_genome_weights,
-            })
-            .is_err()
-        {
-            // UI thread has likely closed, stop training.
-            break;
-        }
-
-        pop.recombination_and_mutation(&sorted_indices);
-    }
-
+    // Signal that training is finished, whether it completed successfully or was aborted.
     let _ = tx.send(TrainingMessage::Finished);
 }

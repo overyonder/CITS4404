@@ -1,6 +1,6 @@
 //! Simulation state and logic for Pong visualization in the TUI.
 use crate::{
-    config::EvolutionConfig,
+    config::Config,
     constants::PADDLE_MAX_VEL,
     engines::HeapIndividual, // Using HeapIndividual as a concrete type for the simulation brain
     gamestate::GameState,
@@ -32,7 +32,7 @@ impl SimulationState {
     }
 
     /// Advance the simulation by one tick/frame, using the neural network to control the paddles.
-    pub fn step(&mut self, config: &EvolutionConfig) {
+    pub fn step(&mut self, config: &Config) {
         // Get inputs for both players from the current game state.
         let p1_inputs = self.game.get_inputs_for_player1();
         let p2_inputs = self.game.get_inputs_for_player2();

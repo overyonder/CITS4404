@@ -1,4 +1,4 @@
-use crate::{config::EvolutionConfig, gamestate::GameState, traits::Individual};
+use crate::{config::Config, gamestate::GameState, traits::Individual};
 use rand::prelude::*;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -32,7 +32,7 @@ pub struct Population<I: Individual> {
     /// Fitness scores for each individual (updated in a parallel-safe way).
     pub fitness: Vec<AtomicU32>,
     /// Evolutionary parameters.
-    pub config: EvolutionConfig,
+    pub config: Config,
 }
 
 impl<I: Individual> Population<I> {
@@ -43,7 +43,7 @@ impl<I: Individual> Population<I> {
     ///
     /// # Returns
     /// A new population with randomly initialized individuals and zeroed fitness scores.
-    pub fn new(config: EvolutionConfig) -> Self {
+    pub fn new(config: Config) -> Self {
         let pop_size = config.population_size;
         Self {
             individuals: (0..pop_size).map(|_| I::default()).collect(),
@@ -95,17 +95,14 @@ impl<I: Individual> Population<I> {
         for fitness in self.fitness.iter() {
             fitness.store(0, Ordering::Relaxed);
         }
-
+        let config = self.config;
         (0..self.config.population_size)
-            .par_bridge()
+            .into_par_iter()
             .for_each(|i| {
                 let mut game_state = GameState::new();
-                for j in (i + 1)..self.config.population_size {
-                    let (returns_i, returns_j) = game_state.simulate(
-                        &self.individuals[i],
-                        &self.individuals[j],
-                        &self.config,
-                    );
+                for j in (i + 1)..config.population_size {
+                    let (returns_i, returns_j) =
+                        game_state.simulate(&self.individuals[i], &self.individuals[j], &config);
                     self.fitness[i].fetch_add(returns_i, Ordering::Relaxed);
                     self.fitness[j].fetch_add(returns_j, Ordering::Relaxed);
                 }
@@ -129,18 +126,7 @@ impl<I: Individual> Population<I> {
     }
 
     /// Fills the next generation with offspring from elites, using crossover and mutation.
-    ///
-    /// # Algorithm
-    /// The top `elite_count` individuals survive unchanged. The remaining individuals
-    /// in the population are replaced by new offspring. Each new child is created by:
-    ///   1. Selecting two random parents from the elites.
-    ///   2. Performing crossover to create a child genome.
-    ///   3. Mutating the child's genome based on `mutation_rate` and `mutation_strength`.
-    ///
-    /// # Teaching Note
-    /// This function implements the "crossover" and "mutation" phases. Elitism ensures
-    /// that the best solutions are never lost from one generation to the next.
-    pub fn recombination_and_mutation(&mut self, sorted_indices: &[usize]) {
+    fn recombination_and_mutation(&mut self, sorted_indices: &[usize]) {
         let mut rng = thread_rng();
         let elite_count = self.config.elite_count;
         let population_size = self.config.population_size;
@@ -168,22 +154,27 @@ impl<I: Individual> Population<I> {
         }
     }
 
-    /// Runs the complete evolutionary process for a specified number of generations.
+    /// Runs the complete evolutionary process for a specified number of generations,
+    /// providing progress updates via a callback.
+    ///
+    /// # Type Parameters
+    /// - `F`: A closure type that takes progress information as arguments.
+    ///
+    /// # Parameters
+    /// - `on_progress`: A callback invoked each generation with stats and the best genome.
     ///
     /// # Algorithm
     /// This is the main loop of the genetic algorithm:
     /// 1. For each generation:
-    ///    - Evaluate all individuals to get their fitness.
+    ///    - Evaluate all individuals.
     ///    - Select the elites.
+    ///    - Invoke the `on_progress` callback with the current stats.
     ///    - Fill the next generation with offspring via crossover and mutation.
-    ///    - Print progress statistics for the generation.
     /// 2. After the final generation, save the best-performing genome to a file.
-    ///
-    /// # Teaching Note
-    /// This function ties all the pieces of the genetic algorithm together. It shows
-    /// the high-level cycle of evaluation, selection, and reproduction.
-    pub fn evolve(&mut self) {
-        println!("Starting evolution...");
+    pub fn evolve<F>(&mut self, mut on_progress: F)
+    where
+        F: FnMut(u32, u32, f32, u32, &[f32]) -> bool, // Return bool to continue
+    {
         for gen in 0..self.config.generations {
             if self.config.concurrent {
                 self.evaluate_fitness_concurrent();
@@ -200,16 +191,22 @@ impl<I: Individual> Population<I> {
                 self.fitness.iter().map(|f| f.load(Ordering::Relaxed)).sum::<u32>() as f32
                     / self.config.population_size as f32;
 
-            println!(
-                "Gen {:<3} | Best: {:<5} | Avg: {:<7.2} | Worst: {}",
-                gen,
+            let best_individual = &self.individuals[sorted_indices[0]];
+
+            // Invoke the callback. If it returns false, stop the evolution.
+            if !on_progress(
+                gen + 1,
                 best_fitness,
                 average_fitness,
-                worst_fitness
-            );
+                worst_fitness,
+                best_individual.weights_as_slice(),
+            ) {
+                return; // Early exit requested by the caller.
+            }
 
             self.recombination_and_mutation(&sorted_indices);
         }
+
         // After evolution, find the best individual and save it.
         let sorted_indices = self.select_elites();
         let best_individual = self.individuals[sorted_indices[0]].clone();
@@ -219,7 +216,5 @@ impl<I: Individual> Population<I> {
         } else {
             println!("Best network saved to {}", file_name);
         }
-
-        println!("Evolution finished.");
     }
 }

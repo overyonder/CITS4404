@@ -4,7 +4,11 @@
 //! running the game, including physics updates, collision detection, and scoring.
 //! It is designed to be completely decoupled from any rendering or UI logic.
 
-use crate::{config::EvolutionConfig, constants::*, traits::Individual};
+use crate::{
+    config::{Config, FitnessFunc},
+    constants::*,
+    traits::Individual,
+};
 use rand::Rng;
 
 /// Represents the full state of a Pong game simulation at a single point in time.
@@ -69,14 +73,14 @@ impl GameState {
     /// inputs from disproportionately influencing the outcome.
     pub fn get_inputs_for_player1(&self) -> [f32; 8] {
         [
-            self.ball_pos.0 / WIDTH as f32,      // Ball X
-            self.ball_pos.1 / HEIGHT as f32,     // Ball Y
-            self.ball_vel.0 / BALL_MAX_SPEED,    // Ball Vel X
-            self.ball_vel.1 / BALL_MAX_SPEED,    // Ball Vel Y
-            self.paddle1_pos / HEIGHT as f32,    // Own Paddle Y
-            self.paddle1_vel / PADDLE_MAX_VEL,   // Own Paddle Vel Y
-            self.paddle2_pos / HEIGHT as f32,    // Opponent Paddle Y
-            self.paddle2_vel / PADDLE_MAX_VEL,   // Opponent Paddle Vel Y
+            self.ball_pos.0 / WIDTH as f32,    // Ball X
+            self.ball_pos.1 / HEIGHT as f32,   // Ball Y
+            self.ball_vel.0 / BALL_MAX_SPEED,  // Ball Vel X
+            self.ball_vel.1 / BALL_MAX_SPEED,  // Ball Vel Y
+            self.paddle1_pos / HEIGHT as f32,  // Own Paddle Y
+            self.paddle1_vel / PADDLE_MAX_VEL, // Own Paddle Vel Y
+            self.paddle2_pos / HEIGHT as f32,  // Opponent Paddle Y
+            self.paddle2_vel / PADDLE_MAX_VEL, // Opponent Paddle Vel Y
         ]
     }
 
@@ -89,13 +93,13 @@ impl GameState {
     pub fn get_inputs_for_player2(&self) -> [f32; 8] {
         [
             (WIDTH as f32 - self.ball_pos.0) / WIDTH as f32, // Flipped Ball X
-            self.ball_pos.1 / HEIGHT as f32,                  // Ball Y
-            -self.ball_vel.0 / BALL_MAX_SPEED,                 // Flipped Ball Vel X
-            self.ball_vel.1 / BALL_MAX_SPEED,                 // Ball Vel Y
-            self.paddle2_pos / HEIGHT as f32,                 // Own Paddle Y (is paddle2)
-            self.paddle2_vel / PADDLE_MAX_VEL,                // Own Paddle Vel Y
-            self.paddle1_pos / HEIGHT as f32,                 // Opponent Paddle Y (is paddle1)
-            self.paddle1_vel / PADDLE_MAX_VEL,                // Opponent Paddle Vel Y
+            self.ball_pos.1 / HEIGHT as f32,                 // Ball Y
+            -self.ball_vel.0 / BALL_MAX_SPEED,               // Flipped Ball Vel X
+            self.ball_vel.1 / BALL_MAX_SPEED,                // Ball Vel Y
+            self.paddle2_pos / HEIGHT as f32,                // Own Paddle Y (is paddle2)
+            self.paddle2_vel / PADDLE_MAX_VEL,               // Own Paddle Vel Y
+            self.paddle1_pos / HEIGHT as f32,                // Opponent Paddle Y (is paddle1)
+            self.paddle1_vel / PADDLE_MAX_VEL,               // Opponent Paddle Vel Y
         ]
     }
 
@@ -121,12 +125,7 @@ impl GameState {
     /// # Algorithm
     /// 1.  `update_paddles`: Get decisions from the neural networks and set paddle velocities.
     /// 2.  `advance_frame`: Update all positions and handle physics/collisions for the tick.
-    pub fn tick<I: Individual>(
-        &mut self,
-        left: &I,
-        right: &I,
-        config: &EvolutionConfig,
-    ) {
+    pub fn tick<I: Individual>(&mut self, left: &I, right: &I, config: &Config) {
         self.update_paddles(left, right, config);
         self.advance_frame();
     }
@@ -138,12 +137,7 @@ impl GameState {
     /// 'action' (the paddle's velocity). The output is a single float, which we scale and
     /// clamp to a valid range. Note that this function *only* sets the velocity; the actual
     /// movement happens in `advance_frame`.
-    pub fn update_paddles<I: Individual>(
-        &mut self,
-        left: &I,
-        right: &I,
-        config: &EvolutionConfig,
-    ) {
+    pub fn update_paddles<I: Individual>(&mut self, left: &I, right: &I, config: &Config) {
         let left_inputs = self.get_inputs_for_player1();
         let right_inputs = self.get_inputs_for_player2();
 
@@ -165,8 +159,10 @@ impl GameState {
     /// 1.  Update paddle positions based on their current velocities, clamping to screen bounds.
     /// 2.  Call `update_ball` to handle all ball-related physics for the frame.
     pub fn advance_frame(&mut self) {
-        self.paddle1_pos = (self.paddle1_pos + self.paddle1_vel).clamp(MIN_PADDLE_POS, MAX_PADDLE_POS);
-        self.paddle2_pos = (self.paddle2_pos + self.paddle2_vel).clamp(MIN_PADDLE_POS, MAX_PADDLE_POS);
+        self.paddle1_pos =
+            (self.paddle1_pos + self.paddle1_vel).clamp(MIN_PADDLE_POS, MAX_PADDLE_POS);
+        self.paddle2_pos =
+            (self.paddle2_pos + self.paddle2_vel).clamp(MIN_PADDLE_POS, MAX_PADDLE_POS);
         self.update_ball();
     }
 
@@ -240,12 +236,7 @@ impl GameState {
     /// 3.  In each tick, check for a game-over condition (max score reached).
     /// 4.  Call `self.tick()` to advance the simulation by one step.
     /// 5.  Return the total number of successful returns for each player.
-    pub fn simulate<I: Individual>(
-        &mut self,
-        left: &I,
-        right: &I,
-        config: &EvolutionConfig,
-    ) -> (u32, u32) {
+    pub fn simulate<I: Individual>(&mut self, left: &I, right: &I, config: &Config) -> (u32, u32) {
         self.scores = (0, 0);
         self.returns = (0, 0);
         self.reset_ball(rand::thread_rng().gen());
@@ -257,6 +248,37 @@ impl GameState {
             }
             self.tick(left, right, config);
         }
-        self.returns
+
+        // Calculate fitness based on the selected function
+        match config.fitness_func {
+            // The original C++ fitness function was simply the number of returns.
+            FitnessFunc::CppEquivalent => self.returns,
+
+            // A balanced approach that rewards returns, but also winning.
+            // A win is worth 5 returns.
+            FitnessFunc::Balanced => {
+                let mut left_score = self.returns.0;
+                let mut right_score = self.returns.1;
+                if self.scores.0 > self.scores.1 {
+                    left_score += 5;
+                } else if self.scores.1 > self.scores.0 {
+                    right_score += 5;
+                }
+                (left_score, right_score)
+            }
+
+            // A performance-focused function that heavily rewards winning.
+            FitnessFunc::Performance => {
+                let mut left_score = self.returns.0;
+                let mut right_score = self.returns.1;
+                if self.scores.0 >= MAX_SCORE {
+                    left_score += 10;
+                }
+                if self.scores.1 >= MAX_SCORE {
+                    right_score += 10;
+                }
+                (left_score, right_score)
+            }
+        }
     }
 }
