@@ -5,6 +5,7 @@ mod gamestate;
 mod population;
 mod traits;
 mod tui;
+mod cpp_compat;
 mod utils;
 
 use crate::{

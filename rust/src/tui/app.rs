@@ -17,6 +17,8 @@ pub enum AppState {
     Training,
     /// The view for visualizing a game of Pong with a trained neural network.
     Simulation,
+    /// A transient state for loading a C++ champion.
+    LoadCppChampion,
     /// A transient state that signals the main loop to terminate.
     Exiting,
 }
@@ -44,6 +46,7 @@ pub struct App {
     pub tab: usize,
     pub tx: Option<Sender<crate::tui::training::TrainingMessage>>,
     pub rx: Option<Receiver<crate::tui::training::TrainingMessage>>,
+    pub error_message: Option<String>,
 }
 
 impl App {
@@ -59,6 +62,7 @@ impl App {
             tab: 0,
             tx: None,
             rx: None,
+            error_message: None,
         }
     }
 

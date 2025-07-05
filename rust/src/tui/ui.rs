@@ -1,4 +1,5 @@
 //! UI rendering and main event loop for the TUI.
+use crate::cpp_compat;
 use crate::{
     constants::{HEIGHT, PADDLE_HEIGHT, WIDTH},
     tui::{
@@ -81,6 +82,18 @@ fn handle_events(app: &mut App) -> Result<()> {
                 sim.step(&app.config);
             }
         }
+        AppState::LoadCppChampion => match cpp_compat::load_cpp_champion("fittest.log") {
+            Ok(weights) => {
+                app.best_genome = Some(weights.clone());
+                app.simulation = Some(SimulationState::new(weights));
+                app.state = AppState::Simulation;
+                app.error_message = None;
+            }
+            Err(e) => {
+                app.error_message = Some(format!("Failed to load C++ champion: {}", e));
+                app.state = AppState::MainMenu;
+            }
+        },
         _ => {}
     }
 
@@ -114,24 +127,24 @@ fn handle_events(app: &mut App) -> Result<()> {
 }
 
 fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
+    let menu_items_count = 4;
     match key_code {
         KeyCode::Up => {
             let i = match app.main_menu.state.selected() {
-                Some(i) => (i.saturating_sub(1)) % 3,
+                Some(i) => (i + menu_items_count - 1) % menu_items_count,
                 None => 0,
             };
             app.main_menu.state.select(Some(i));
         }
         KeyCode::Down => {
             let i = match app.main_menu.state.selected() {
-                Some(i) => (i + 1) % 3,
+                Some(i) => (i + 1) % menu_items_count,
                 None => 0,
             };
             app.main_menu.state.select(Some(i));
         }
         KeyCode::Enter => match app.main_menu.state.selected() {
             Some(0) => {
-                // Start Training
                 app.state = AppState::Training;
                 let (tx, rx) = mpsc::channel();
                 app.tx = Some(tx.clone());
@@ -140,20 +153,21 @@ fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
                 evolve_with_progress(app.config.clone(), tx);
             }
             Some(1) => {
-                // Start Simulation
-                if let Some(genome) = app.best_genome.clone() {
+                if let Some(genome) = &app.best_genome {
+                    app.simulation = Some(SimulationState::new(genome.clone()));
                     app.state = AppState::Simulation;
-                    app.simulation = Some(SimulationState::new(genome));
+                    app.error_message = None;
                 } else {
-                    // Optionally, show a message that no trained genome is available.
+                    app.error_message =
+                        Some("No model available. Train or load a model first.".to_string());
                 }
             }
-            Some(2) => app.state = AppState::Exiting,
+            Some(2) => {
+                app.state = AppState::LoadCppChampion;
+            }
+            Some(3) => app.state = AppState::Exiting,
             _ => {}
         },
-        KeyCode::Char('q') => {
-            app.state = AppState::Exiting;
-        }
         _ => {}
     }
 }
@@ -170,15 +184,38 @@ fn ui_builder(f: &mut Frame, app: &mut App) {
         AppState::MainMenu => draw_main_menu(f, app, chunks[0]),
         AppState::Training => draw_training_ui(f, app, chunks[0]),
         AppState::Simulation => draw_simulation_ui(f, app, chunks[0]),
+        AppState::LoadCppChampion => {
+            let p = Paragraph::new("Loading C++ champion...")
+                .block(Block::default().title("Loading").borders(Borders::ALL));
+            f.render_widget(p, chunks[0]);
+        }
         AppState::Exiting => {} // Do nothing, will exit loop
     }
 }
 
 fn draw_main_menu(f: &mut Frame, app: &mut App, area: Rect) {
+    let (menu_area, error_area) = if app.error_message.is_some() {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(3)])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    if let (Some(msg), Some(err_area)) = (app.error_message.take(), error_area) {
+        let p = Paragraph::new(msg)
+            .style(Style::default().fg(Color::Red))
+            .block(Block::default().title("Error").borders(Borders::ALL));
+        f.render_widget(p, err_area);
+    }
+
     let items = [
-        ListItem::new("1. Start Training"),
-        ListItem::new("2. Run Simulation"),
-        ListItem::new("3. Exit"),
+        ListItem::new("Train New Model"),
+        ListItem::new("Simulate Best Model"),
+        ListItem::new("Load C++ Champion"),
+        ListItem::new("Quit"),
     ];
     let list = List::new(items)
         .block(Block::default().title("Main Menu").borders(Borders::ALL))
@@ -188,8 +225,7 @@ fn draw_main_menu(f: &mut Frame, app: &mut App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("> ");
-
-    f.render_stateful_widget(list, area, &mut app.main_menu.state);
+    f.render_stateful_widget(list, menu_area, &mut app.main_menu.state);
 }
 
 fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
@@ -259,7 +295,7 @@ fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
             .marker(symbols::Marker::Block)
             .x_bounds([0.0, WIDTH as f64])
             .y_bounds([0.0, HEIGHT as f64])
-            .paint(|ctx| {
+            .paint(move |ctx| {
                 // Draw Paddles
                 ctx.draw(&Rectangle {
                     x: 0.0,
@@ -289,7 +325,7 @@ fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
                 ctx.print(
                     WIDTH as f64 / 2.0 - 5.0,
                     HEIGHT as f64 - 5.0,
-                    score_text.fg(Color::White),
+                    score_text.clone().fg(Color::White),
                 );
             });
         f.render_widget(canvas, area);
