@@ -1,34 +1,34 @@
+// Game constants
 pub const WIDTH: u16 = 1000;
 pub const LENGTH: u16 = 1000;
-pub const PADDLE_WIDTH: u16 = 10;
+pub const PADDLE_WIDTH: u16 = 1;
 pub const PADDLE_HEIGHT: u16 = 100;
-pub const PADDLE_MAX_VEL: i16 = 10;
+pub const PADDLE_MAX_VEL: f32 = 20.0;
 pub const MAX_SCORE: u8 = 10;
 pub const TICK_RATE: u16 = 60;
-pub const MAX_POSITION: u16 = LENGTH - PADDLE_HEIGHT;
-pub const BALL_START_VEL: [f64; 2] = [
-    (LENGTH as f64) / (TICK_RATE as f64),
-    (LENGTH as f64) / (TICK_RATE as f64),
-];
+// Min and max for the PADDLE'S CENTER.
+pub const MIN_PADDLE_POS: f32 = PADDLE_HEIGHT as f32 / 2.0;
+pub const MAX_PADDLE_POS: f32 = LENGTH as f32 - PADDLE_HEIGHT as f32 / 2.0;
 
-// --- Genetic Algorithm Constants ---
+// Neural Network Layout
+pub const LAYERS: [usize; 4] = [6, 16, 4, 1]; // Input, Hidden 1, Hidden 2, Output
+pub const INPUT_SIZE: usize = LAYERS[0];
+pub const L1_SIZE: usize = LAYERS[1];
+pub const L2_SIZE: usize = LAYERS[2];
+pub const L3_SIZE: usize = LAYERS[3];
 
-/// The number of networks in each generation.
+// Calculate weights for each layer (including bias node)
+pub const L1_WEIGHTS: usize = L1_SIZE * (INPUT_SIZE + 1);
+pub const L2_WEIGHTS: usize = L2_SIZE * (L1_SIZE + 1);
+pub const L3_WEIGHTS: usize = L3_SIZE * (L2_SIZE + 1);
+pub const TOTAL_WEIGHTS: usize = L1_WEIGHTS + L2_WEIGHTS + L3_WEIGHTS;
+
+// Genetic Algorithm constants
 pub const POPULATION_SIZE: usize = 128;
+pub const ELITE_COUNT: usize = 11; // ~sqrt(128)
+pub const MUTATION_RATE: f32 = 0.1;
+pub const MUTATION_STRENGTH: f32 = 0.2;
 
-/// The number of the best networks to carry over to the next generation.
-pub const ELITE_COUNT: usize = 11; // sqrt(128)
-pub const LAYERS: [usize; 4] = [8, 16, 4, 1];
+// File for saving the best network
+pub const BEST_NET_FILE: &str = "best_net.bin";
 
-// A const function to calculate the total number of weights and biases needed.
-const fn get_total_weights() -> usize {
-    let mut total = 0;
-    let mut i = 0;
-    while i < LAYERS.len() - 1 {
-        total += LAYERS[i] * LAYERS[i + 1] + LAYERS[i + 1]; // weights + biases
-        i += 1;
-    }
-    total
-}
-
-pub const TOTAL_WEIGHTS: usize = get_total_weights();
