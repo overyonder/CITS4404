@@ -88,7 +88,10 @@ fn main() -> io::Result<()> {
     // This allows `tracing` macros (info!, error!, etc.) to be captured
     // and displayed in the TUI's log widget.
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,wgpu=error,naga=warn")),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 

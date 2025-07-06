@@ -1,7 +1,7 @@
 //! The simulation screen component.
 
 use crate::{
-    constants::{BALL_RADIUS, HEIGHT, PADDLE_HEIGHT, PADDLE_WIDTH, WIDTH},
+    constants::{HEIGHT, PADDLE_HEIGHT, WIDTH},
     tui::app::{App, AppState},
 };
 use crossterm::event::KeyCode;
@@ -40,10 +40,10 @@ pub fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
             .paint(|ctx| {
                 // Draw ball
                 ctx.draw(&Rectangle {
-                    x: (sim.game.ball_pos.0 - BALL_RADIUS) as f64,
-                    y: (sim.game.ball_pos.1 - BALL_RADIUS) as f64,
-                    width: (BALL_RADIUS * 2.0) as f64,
-                    height: (BALL_RADIUS * 2.0) as f64,
+                    x: sim.game.ball_pos.0 as f64,
+                    y: sim.game.ball_pos.1 as f64,
+                    width: 5.0,
+                    height: 5.0,
                     color: Color::Yellow,
                 });
 
@@ -51,16 +51,16 @@ pub fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
                 ctx.draw(&Rectangle {
                     x: 0.0,
                     y: (sim.game.paddle1_pos - PADDLE_HEIGHT as f32 / 2.0) as f64,
-                    width: PADDLE_WIDTH as f64,
+                    width: 5.0 as f64,
                     height: PADDLE_HEIGHT as f64,
                     color: Color::Blue,
                 });
 
                 // Draw right paddle (paddle2)
                 ctx.draw(&Rectangle {
-                    x: (WIDTH - PADDLE_WIDTH) as f64,
+                    x: (WIDTH) as f64,
                     y: (sim.game.paddle2_pos - PADDLE_HEIGHT as f32 / 2.0) as f64,
-                    width: PADDLE_WIDTH as f64,
+                    width: 5.0 as f64,
                     height: PADDLE_HEIGHT as f64,
                     color: Color::Red,
                 });

@@ -241,7 +241,7 @@ impl Individual for GpuIndividual<'_> {
         let mut child_weights = vec![0.0; TOTAL_WEIGHTS];
 
         for i in 0..TOTAL_WEIGHTS {
-            child_weights[i] = if rng.random::<bool>() {
+            child_weights[i] = if rng.gen_bool(0.5) {
                 p1_weights[i]
             } else {
                 p2_weights[i]
@@ -445,9 +445,11 @@ impl<'a> GpuIndividual<'a> {
 
     /// Synchronizes the CPU-side weight cache to the GPU buffer.
     fn sync_weights_to_gpu(&self) {
-        self.context
-            .queue
-            .write_buffer(&self.weights_buffer, 0, bytemuck::cast_slice(&self.weights));
+        self.context.queue.write_buffer(
+            &self.weights_buffer,
+            0,
+            bytemuck::cast_slice(&self.weights),
+        );
     }
 
     /// Reads the weights from the GPU buffer back to the CPU.

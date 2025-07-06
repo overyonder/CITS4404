@@ -28,6 +28,8 @@ pub fn handle_training_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Tab => {
             app.next_tab();
         }
+        KeyCode::Up => tui_logger::move_selection(&mut app.log_state, -1),
+        KeyCode::Down => tui_logger::move_selection(&mut app.log_state, 1),
         _ => {}
     }
 }

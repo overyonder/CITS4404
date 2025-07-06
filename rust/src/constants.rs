@@ -24,11 +24,8 @@ pub const WIDTH: u16 = 400;
 /// code more intuitive to read than alternatives like `LENGTH`.
 pub const HEIGHT: u16 = 300;
 
-/// The width of each paddle in pixels.
-pub const PADDLE_WIDTH: u16 = 1;
-
 /// The height of each paddle in pixels.
-pub const PADDLE_HEIGHT: u16 = (HEIGHT / 8) as u16; // 37.5 in C++
+pub const PADDLE_HEIGHT: f32 = HEIGHT as f32 / 8.0; // 37.5 in C++
 
 /// The maximum score before a game ends.
 pub const MAX_SCORE: u8 = 1;
@@ -47,27 +44,20 @@ pub const TICK_RATE: u16 = 60;
 /// The maximum velocity of a paddle in pixels per tick.
 pub const PADDLE_MAX_VEL: f32 = HEIGHT as f32 / TICK_RATE as f32; // 5.0 in C++
 
-/// The radius of the ball in pixels.
-///
-/// # Teaching Note
-/// Using a radius allows for more accurate collision detection against the ball's edge
-/// rather than its center point.
-pub const BALL_RADIUS: f32 = 0.0; // C++ version is a point
+/// The initial x-velocity of the ball in pixels per tick.
+pub const BALL_INITIAL_VEL_X: f32 = WIDTH as f32 / TICK_RATE as f32;
 
-/// The initial speed of the ball in pixels per tick.
-pub const BALL_INITIAL_SPEED: f32 = 9.42; // Corresponds to C++ initial velocity vector
+/// The initial y-velocity of the ball in pixels per tick.
+pub const BALL_INITIAL_VEL_Y: f32 = WIDTH as f32 / TICK_RATE as f32;
 
 /// The maximum speed the ball can reach.
-///
-/// # Teaching Note
-/// Clamping the ball's speed is important for game balance, preventing it from
-/// becoming uncontrollably fast after many paddle hits.
-pub const BALL_MAX_SPEED: f32 = 100.0; // C++ has no max, set high
+/// C++ has no limit, so we set this to the maximum f32 value.
+pub const BALL_MAX_SPEED: f32 = f32::MAX;
 
 /// The minimum y-coordinate for a paddle's center.
 /// This is calculated to be half the paddle's height, preventing any part of the
 /// paddle from going above the top edge of the screen.
-pub const MIN_PADDLE_POS: f32 = PADDLE_HEIGHT as f32 / 2.0;
+pub const MIN_PADDLE_POS: f32 = PADDLE_HEIGHT / 2.0;
 
 /// The maximum y-coordinate for a paddle's center.
 /// This is calculated to prevent any part of the paddle from going below the
