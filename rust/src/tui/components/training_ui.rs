@@ -7,7 +7,6 @@ use crate::tui::{
 use crossterm::event::KeyCode;
 use ratatui::widgets::canvas::{Canvas, Rectangle};
 
-use tui_logger::TuiLoggerWidget;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -15,6 +14,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Gauge, Paragraph, Sparkline, Tabs},
     Frame,
 };
+use tui_logger::TuiLoggerWidget;
 
 /// Handles user input on the training screen.
 pub fn handle_training_input(app: &mut App, key_code: KeyCode) {
@@ -28,8 +28,6 @@ pub fn handle_training_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Tab => {
             app.next_tab();
         }
-        KeyCode::Up => tui_logger::move_selection(&mut app.log_state, -1),
-        KeyCode::Down => tui_logger::move_selection(&mut app.log_state, 1),
         _ => {}
     }
 }
@@ -97,7 +95,11 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
         let progress_chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints(&[Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
+            .constraints(&[
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
             .split(progress_area);
 
         // Progress Gauge
@@ -123,17 +125,16 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
         // Stopwatch
         let elapsed = training_state.start_time.elapsed();
         let elapsed_secs = elapsed.as_secs();
-        let stopwatch_text = format!(
-            "Time: {:02}:{:02}",
-            elapsed_secs / 60,
-            elapsed_secs % 60
-        );
+        let stopwatch_text = format!("Time: {:02}:{:02}", elapsed_secs / 60, elapsed_secs % 60);
         let stopwatch_paragraph = Paragraph::new(stopwatch_text).alignment(Alignment::Center);
         f.render_widget(stopwatch_paragraph, progress_chunks[2]);
 
         // Fitness History Sparkline
-        let fitness_data: Vec<u64> =
-            training_state.fitness_history.iter().map(|&f| f as u64).collect();
+        let fitness_data: Vec<u64> = training_state
+            .fitness_history
+            .iter()
+            .map(|&f| f as u64)
+            .collect();
 
         let sparkline = Sparkline::default()
             .block(
@@ -165,7 +166,11 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
                     // Normalize the genome weights to a 0-1 range for color mapping.
                     let min_val = genome.iter().fold(f32::INFINITY, |a, &b| a.min(b));
                     let max_val = genome.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-                    let range = if max_val > min_val { max_val - min_val } else { 1.0 };
+                    let range = if max_val > min_val {
+                        max_val - min_val
+                    } else {
+                        1.0
+                    };
 
                     for (i, &weight) in genome.iter().enumerate() {
                         let normalized = (weight - min_val) / range;
@@ -288,26 +293,25 @@ fn draw_matchups_view(f: &mut Frame, training_state: &TrainingState, area: Rect)
         .x_bounds([0.0, cols as f64 * cell_size])
         .y_bounds([0.0, rows as f64 * cell_size])
         .paint(move |ctx| {
+            for (i, state) in training_state.matchups.iter().enumerate() {
+                let col = i % cols;
+                let row = i / cols;
 
-        for (i, state) in training_state.matchups.iter().enumerate() {
-            let col = i % cols;
-            let row = i / cols;
+                let color = match state {
+                    MatchupState::Pending => Color::DarkGray,
+                    MatchupState::InProgress => Color::Yellow,
+                    MatchupState::Completed => Color::Green,
+                };
 
-            let color = match state {
-                MatchupState::Pending => Color::DarkGray,
-                MatchupState::InProgress => Color::Yellow,
-                MatchupState::Completed => Color::Green,
-            };
-
-            ctx.draw(&Rectangle {
-                x: col as f64 * cell_size,
-                y: (rows - 1 - row) as f64 * cell_size,
-                width: 1.0,
-                height: 1.0,
-                color,
-            });
-        }
-    });
+                ctx.draw(&Rectangle {
+                    x: col as f64 * cell_size,
+                    y: (rows - 1 - row) as f64 * cell_size,
+                    width: 1.0,
+                    height: 1.0,
+                    color,
+                });
+            }
+        });
 
     f.render_widget(canvas, inner_area);
 }
@@ -364,7 +368,10 @@ fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
         Line::from(format!("Fitness Fn: {}", app.config.fitness_func)),
         Line::from(format!("Population: {}", app.config.population_size)),
         Line::from(format!("Mutation Rate: {}", app.config.mutation_rate)),
-        Line::from(format!("Mutation Strength: {}", app.config.mutation_strength)),
+        Line::from(format!(
+            "Mutation Strength: {}",
+            app.config.mutation_strength
+        )),
     ];
 
     if is_concurrent {

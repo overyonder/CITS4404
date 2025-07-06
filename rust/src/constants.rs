@@ -50,20 +50,6 @@ pub const BALL_INITIAL_VEL_X: f32 = WIDTH as f32 / TICK_RATE as f32;
 /// The initial y-velocity of the ball in pixels per tick.
 pub const BALL_INITIAL_VEL_Y: f32 = WIDTH as f32 / TICK_RATE as f32;
 
-/// The maximum speed the ball can reach.
-/// C++ has no limit, so we set this to the maximum f32 value.
-pub const BALL_MAX_SPEED: f32 = f32::MAX;
-
-/// The minimum y-coordinate for a paddle's center.
-/// This is calculated to be half the paddle's height, preventing any part of the
-/// paddle from going above the top edge of the screen.
-pub const MIN_PADDLE_POS: f32 = PADDLE_HEIGHT / 2.0;
-
-/// The maximum y-coordinate for a paddle's center.
-/// This is calculated to prevent any part of the paddle from going below the
-/// bottom edge of the screen.
-pub const MAX_PADDLE_POS: f32 = HEIGHT as f32 - PADDLE_HEIGHT as f32 / 2.0;
-
 // ----------------------------------------------------------------------------
 // Neural Network Architecture
 // ----------------------------------------------------------------------------

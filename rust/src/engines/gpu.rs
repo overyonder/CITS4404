@@ -241,7 +241,7 @@ impl Individual for GpuIndividual<'_> {
         let mut child_weights = vec![0.0; TOTAL_WEIGHTS];
 
         for i in 0..TOTAL_WEIGHTS {
-            child_weights[i] = if rng.gen_bool(0.5) {
+            child_weights[i] = if rng.random_bool(0.5) {
                 p1_weights[i]
             } else {
                 p2_weights[i]

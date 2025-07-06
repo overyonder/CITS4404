@@ -10,6 +10,7 @@ use crate::{
     traits::Individual,
 };
 use rand::Rng;
+use rand_distr::{Distribution, Normal};
 
 /// Represents the full state of a Pong game simulation at a single point in time.
 ///
@@ -83,13 +84,13 @@ impl GameState {
     pub fn get_inputs_for_player1(&self) -> [f32; 8] {
         [
             (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0, // Own Paddle Y
-            self.paddle1_vel / PADDLE_MAX_VEL,                // Own Paddle Vel Y
-            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0,   // Opponent Paddle Y
-            self.paddle2_vel / PADDLE_MAX_VEL,                // Opponent Paddle Vel Y
-            (2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0,     // Ball X
-            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,    // Ball Y
-            self.ball_vel.0 / (2.0 * BALL_INITIAL_VEL_X),     // Ball Vel X
-            self.ball_vel.1 / (2.0 * BALL_INITIAL_VEL_Y),     // Ball Vel Y
+            self.paddle1_vel / PADDLE_MAX_VEL,              // Own Paddle Vel Y
+            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0, // Opponent Paddle Y
+            self.paddle2_vel / PADDLE_MAX_VEL,              // Opponent Paddle Vel Y
+            (2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0,   // Ball X
+            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,  // Ball Y
+            self.ball_vel.0 / (2.0 * BALL_INITIAL_VEL_X),   // Ball Vel X
+            self.ball_vel.1 / (2.0 * BALL_INITIAL_VEL_Y),   // Ball Vel Y
         ]
     }
 
@@ -105,13 +106,13 @@ impl GameState {
     pub fn get_inputs_for_player2(&self) -> [f32; 8] {
         [
             (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0, // Own Paddle Y (was paddle2)
-            self.paddle2_vel / PADDLE_MAX_VEL,                // Own Paddle Vel Y
-            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0,   // Opponent Paddle Y (was paddle1)
-            self.paddle1_vel / PADDLE_MAX_VEL,                // Opponent Paddle Vel Y
-            -((2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0),   // Inverted Ball X
-            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,    // Ball Y
-            -self.ball_vel.0 / (2.0 * BALL_INITIAL_VEL_X),   // Inverted Ball Vel X
-            self.ball_vel.1 / (2.0 * BALL_INITIAL_VEL_Y),     // Ball Vel Y
+            self.paddle2_vel / PADDLE_MAX_VEL,              // Own Paddle Vel Y
+            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0, // Opponent Paddle Y (was paddle1)
+            self.paddle1_vel / PADDLE_MAX_VEL,              // Opponent Paddle Vel Y
+            -((2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0), // Inverted Ball X
+            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,  // Ball Y
+            -self.ball_vel.0 / (2.0 * BALL_INITIAL_VEL_X),  // Inverted Ball Vel X
+            self.ball_vel.1 / (2.0 * BALL_INITIAL_VEL_Y),   // Ball Vel Y
         ]
     }
 
@@ -201,8 +202,8 @@ impl GameState {
         self.ball_pos.1 += self.ball_vel.1;
 
         // Top/Bottom wall collision
-        if (self.ball_pos.1 - BALL_RADIUS <= 0.0 && self.ball_vel.1 < 0.0)
-            || (self.ball_pos.1 + BALL_RADIUS >= HEIGHT as f32 && self.ball_vel.1 > 0.0)
+        if (self.ball_pos.1 <= 0.0 && self.ball_vel.1 < 0.0)
+            || (self.ball_pos.1 >= HEIGHT as f32 && self.ball_vel.1 > 0.0)
         {
             self.ball_vel.1 *= -1.0;
         }
@@ -212,7 +213,7 @@ impl GameState {
         let paddle2_box = (WIDTH as f32, self.paddle2_pos);
 
         // Left paddle collision
-        if self.ball_vel.0 < 0.0 && self.ball_pos.0 - BALL_RADIUS <= paddle1_box.0 {
+        if self.ball_vel.0 < 0.0 && self.ball_pos.0 <= paddle1_box.0 {
             let paddle_top = paddle1_box.1 - PADDLE_HEIGHT / 2.0;
             let paddle_bottom = paddle1_box.1 + PADDLE_HEIGHT / 2.0;
             if self.ball_pos.1 >= paddle_top && self.ball_pos.1 <= paddle_bottom {
@@ -221,12 +222,13 @@ impl GameState {
 
                 // Add random deflection
                 let mut rng = rand::rng();
-                self.ball_vel.1 += rng.normal(0.0, 0.05) * BALL_INITIAL_VEL_Y;
+                self.ball_vel.1 +=
+                    Normal::from_mean_cv(0.0, 0.05).unwrap().sample(&mut rng) * BALL_INITIAL_VEL_Y;
 
                 self.returns.0 += 1;
             }
             // Right paddle collision
-        } else if self.ball_vel.0 > 0.0 && self.ball_pos.0 + BALL_RADIUS >= paddle2_box.0 {
+        } else if self.ball_vel.0 > 0.0 && self.ball_pos.0 >= paddle2_box.0 {
             let paddle_top = paddle2_box.1 - PADDLE_HEIGHT / 2.0;
             let paddle_bottom = paddle2_box.1 + PADDLE_HEIGHT / 2.0;
             if self.ball_pos.1 >= paddle_top && self.ball_pos.1 <= paddle_bottom {
@@ -235,7 +237,8 @@ impl GameState {
 
                 // Add random deflection
                 let mut rng = rand::rng();
-                self.ball_vel.1 += rng.normal(0.0, 0.05) * BALL_INITIAL_VEL_Y;
+                self.ball_vel.1 +=
+                    Normal::from_mean_cv(0.0, 0.05).unwrap().sample(&mut rng) * BALL_INITIAL_VEL_Y;
 
                 self.returns.1 += 1;
             }
@@ -285,12 +288,12 @@ impl GameState {
         // A common mistake is to only check the ball's center (`ball_pos.0 < 0.0`).
         // By checking `ball_pos.0 + BALL_RADIUS < 0.0`, we ensure the score only triggers
         // after the entire ball is off-screen, which is physically accurate.
-        if self.ball_pos.0 + BALL_RADIUS < 0.0 {
+        if self.ball_pos.0 < 0.0 {
             self.scores.1 += 1; // Player 2 (right) scores
             self.paddle1_pos = (HEIGHT / 2) as f32;
             self.paddle2_pos = (HEIGHT / 2) as f32;
             self.reset_ball(true); // Serve to player 2 (right)
-        } else if self.ball_pos.0 - BALL_RADIUS > WIDTH as f32 {
+        } else if self.ball_pos.0 > WIDTH as f32 {
             self.scores.0 += 1; // Player 1 (left) scores
             self.paddle1_pos = (HEIGHT / 2) as f32;
             self.paddle2_pos = (HEIGHT / 2) as f32;
