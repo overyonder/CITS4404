@@ -38,12 +38,15 @@ struct GpuConfig {
 
 impl GpuContext {
     fn new() -> Self {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("Failed to find an appropriate adapter");
 
-        let (device, queue) = block_on(adapter.request_device(&Default::default(), None))
-            .expect("Failed to get device");
+        let (device, queue) =
+            block_on(adapter.request_device(&Default::default())).expect("Failed to get device");
 
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Forward Pass Shader"),
@@ -110,7 +113,9 @@ impl GpuContext {
             label: Some("Forward Pass Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader_module,
-            entry_point: "main",
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
         });
 
         GpuContext {
@@ -261,7 +266,7 @@ impl Individual for GpuIndividual<'_> {
         let mut child_weights = vec![0.0; TOTAL_WEIGHTS];
 
         for i in 0..TOTAL_WEIGHTS {
-            child_weights[i] = if rng.gen() {
+            child_weights[i] = if rng.random::<bool>() {
                 p1_weights[i]
             } else {
                 p2_weights[i]
@@ -277,11 +282,11 @@ impl Individual for GpuIndividual<'_> {
     /// bulk transfer of the updated data to the corresponding GPU buffer, ensuring the two
     /// copies remain synchronized.
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
-        let normal = Normal::new(0.0, config.mutation_strength).unwrap();
+        let normal = Normal::new(0.0, config.mutation_strength as f64).unwrap();
 
         for i in 0..TOTAL_WEIGHTS {
-            if rng.gen::<f32>() < config.mutation_rate {
-                self.weights[i] += normal.sample(rng);
+            if rng.random::<f32>() < config.mutation_rate {
+                self.weights[i] += normal.sample(rng) as f32;
             }
         }
         // After mutating the CPU-side cache, update the GPU buffer.
@@ -374,9 +379,9 @@ impl Default for GpuIndividual<'_> {
     /// to a new buffer on the GPU.
     fn default() -> Self {
         let mut weights = vec![0.0; TOTAL_WEIGHTS];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for weight in weights.iter_mut() {
-            *weight = rng.gen_range(-1.0..=1.0);
+            *weight = rng.random_range(-1.0..=1.0);
         }
         GpuIndividual::from_weights(&weights)
     }
@@ -417,7 +422,7 @@ impl<'a> GpuIndividual<'a> {
     /// # Teaching Note
     /// This function demonstrates how to read data back from the GPU. It involves creating a
     /// special "staging" buffer that is accessible by both the CPU and GPU. A command is
-/// encoded to copy from the main weights buffer to the staging buffer. The CPU then has
+    /// encoded to copy from the main weights buffer to the staging buffer. The CPU then has
     /// to wait for the GPU to finish this operation before it can map the staging buffer's
     /// memory and read the data. This is a synchronous and potentially slow operation.
     #[allow(dead_code)]
@@ -458,7 +463,6 @@ fn read_buffer_sync(buffer: &wgpu::Buffer, mut callback: impl FnMut(&[u8])) {
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
         sender.send(v).unwrap();
     });
-    GPU_CONTEXT.device.poll(wgpu::Maintain::Wait);
 
     if let Ok(Ok(())) = receiver.recv() {
         let data = buffer_slice.get_mapped_range();

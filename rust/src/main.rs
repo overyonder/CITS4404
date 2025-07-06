@@ -18,7 +18,7 @@ use crate::{
 use clap::Parser;
 use std::io::{self, Read};
 use tracing::{error, info, warn};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Command-line arguments for configuring the evolutionary algorithm and neural network engine.
 ///
@@ -82,14 +82,12 @@ struct Args {
 
 /// Application entry point.
 fn main() -> io::Result<()> {
-    // Initialize the logging subscriber.
-    // You can override the log level by setting the RUST_LOG environment variable.
-    // For example: `RUST_LOG=debug` or `RUST_LOG=trace`
-    tracing_subscriber::fmt()
-        .compact()
-        .with_target(false)
-        .with_timer(tracing_subscriber::fmt::time::uptime())
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+    // Initialize tracing with tui-logger as a layer.
+    // This allows `tracing` macros (info!, error!, etc.) to be captured
+    // and displayed in the TUI's log widget.
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(tracing_subscriber::fmt::layer())
         .init();
 
     let args = Args::parse();
@@ -152,24 +150,16 @@ fn run_cli(args: Args) {
     }
 
     info!("Running in headless mode with engine: {}", config.engine);
-    info!("Configuration: {:#?}", &config);
-
-    let evolution_callback = |gen, best_fitness, avg_fitness, worst_fitness, _genome: &[f32]| {
-        info!(
-            "Gen {:<4}/ {} | Best: {:<5} | Avg: {:<7.2} | Worst: {}",
-            gen, config.generations, best_fitness, avg_fitness, worst_fitness
-        );
-        true
-    };
-
     info!("Starting evolution...");
 
     // This macro reduces code duplication for running evolution and saving the best individual.
     // It uses static dispatch by creating a new population of a specific Individual type.
     macro_rules! run_evolution {
-        ($individual_type:ty, $config:expr, $args:expr, $callback:expr) => {{
+        ($individual_type:ty, $config:expr, $args:expr) => {{
             let mut pop: Population<$individual_type> = Population::new($config.clone());
-            let best_individual = pop.evolve($callback);
+            // In CLI mode, we don't have a UI, so we pass `None` for the sender.
+            // The `evolve` function will print progress to the console when sender is `None`.
+            let best_individual = pop.evolve(None);
             if let Some(path) = &$args.save_to {
                 if let Err(e) = best_individual.save(path, &$config) {
                     error!("Failed to save best individual: {}", e);
@@ -182,18 +172,10 @@ fn run_cli(args: Args) {
 
     // We use the macro to generate type-specific code for each engine, avoiding dyn Trait.
     match config.engine {
-        Engine::Stack => {
-            run_evolution!(StackIndividual, config, args, evolution_callback)
-        }
-        Engine::Heap => {
-            run_evolution!(HeapIndividual, config, args, evolution_callback)
-        }
-        Engine::Simd => {
-            run_evolution!(SimdIndividual, config, args, evolution_callback)
-        }
-        Engine::Gpu => {
-            run_evolution!(GpuIndividual, config, args, evolution_callback)
-        }
+        Engine::Stack => run_evolution!(StackIndividual, config, args),
+        Engine::Heap => run_evolution!(HeapIndividual, config, args),
+        Engine::Simd => run_evolution!(SimdIndividual, config, args),
+        Engine::Gpu => run_evolution!(GpuIndividual, config, args),
     };
 
     info!("Evolution finished.");

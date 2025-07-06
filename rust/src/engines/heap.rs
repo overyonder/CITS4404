@@ -34,9 +34,9 @@ impl Default for HeapIndividual {
     /// the starting population has diversity, providing a wide base for evolution to begin.
     fn default() -> Self {
         let mut weights = vec![0.0; TOTAL_WEIGHTS];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for weight in weights.iter_mut() {
-            *weight = rng.gen_range(-1.0..=1.0);
+            *weight = rng.random_range(-1.0..=1.0);
         }
         Self { weights }
     }

@@ -4,6 +4,7 @@
 //! evolutionary algorithm and the neural network engines. It is designed to be
 //! clear, well-documented, and easy to extend.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -88,7 +89,7 @@ impl fmt::Display for FitnessFunc {
 /// `Default` trait, we provide a sensible baseline configuration. Users can then
 /// instantiate a default and modify only the fields they care about, either in code
 /// or through the CLI parser.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// The neural network engine to use.
     pub engine: Engine,
@@ -118,6 +119,9 @@ pub struct Config {
     pub elite_count: usize,
     /// The fitness function to use for the evolutionary algorithm.
     pub fitness_func: FitnessFunc,
+    /// The UTC date and time when the model was saved.
+    #[serde(default)]
+    pub date_trained: Option<DateTime<Utc>>,
 }
 
 /// Provides a default, sensible configuration for the evolutionary algorithm.
@@ -138,6 +142,7 @@ impl Default for Config {
             population_size: 128,
             elite_count: 2, // Keep the top 2 individuals
             fitness_func: FitnessFunc::default(),
+            date_trained: None,
         }
     }
 }

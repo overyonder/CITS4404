@@ -165,9 +165,9 @@ impl Default for StackIndividual {
     /// If they were all initialized to zero, they would all behave identically.
     fn default() -> Self {
         let mut weights = [0.0; TOTAL_WEIGHTS];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for weight in weights.iter_mut() {
-            *weight = rng.gen_range(-1.0..=1.0);
+            *weight = rng.random_range(-1.0..=1.0);
         }
         Self { weights }
     }

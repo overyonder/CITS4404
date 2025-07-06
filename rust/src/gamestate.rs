@@ -55,8 +55,19 @@ impl GameState {
             scores: (0, 0),
             returns: (0, 0),
         };
-        new_state.reset_ball(rand::thread_rng().gen()); // Set initial ball state
+        new_state.reset_ball(rand::rng().random()); // Set initial ball state
         new_state
+    }
+
+    /// Resets the game state to its initial configuration for a new match.
+    pub fn reset(&mut self) {
+        self.paddle1_pos = (HEIGHT / 2) as f32;
+        self.paddle1_vel = 0.0;
+        self.paddle2_pos = (HEIGHT / 2) as f32;
+        self.paddle2_vel = 0.0;
+        self.scores = (0, 0);
+        self.returns = (0, 0);
+        self.reset_ball(rand::rng().random());
     }
 
     /// Prepares the 8-element input array for the **left paddle's** neural network.
@@ -105,9 +116,13 @@ impl GameState {
     pub fn reset_ball(&mut self, serve_to_left_player: bool) {
         self.ball_pos = ((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Aim the ball within a 45-degree cone towards the opponent.
-        let angle = rng.gen_range(-std::f32::consts::FRAC_PI_4..=std::f32::consts::FRAC_PI_4);
+        let angle = if serve_to_left_player {
+            rng.random_range(-std::f32::consts::FRAC_PI_4..=std::f32::consts::FRAC_PI_4)
+        } else {
+            rng.random_range(3.0 * std::f32::consts::FRAC_PI_4..=5.0 * std::f32::consts::FRAC_PI_4)
+        };
 
         self.ball_vel.0 = BALL_INITIAL_SPEED * angle.cos();
         self.ball_vel.1 = BALL_INITIAL_SPEED * angle.sin();
@@ -244,7 +259,7 @@ impl GameState {
     pub fn simulate<I: Individual>(&mut self, left: &I, right: &I, config: &Config) -> (u32, u32) {
         self.scores = (0, 0);
         self.returns = (0, 0);
-        self.reset_ball(rand::thread_rng().gen());
+        self.reset_ball(rand::rng().random());
 
         // # Teaching Note
         // The simulation runs for a maximum number of ticks (e.g., 30 seconds worth).

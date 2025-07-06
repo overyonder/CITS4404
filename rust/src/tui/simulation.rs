@@ -10,24 +10,27 @@ use crate::{
 pub struct SimulationState {
     pub game: GameState,
     p1_brain: HeapIndividual,
-    p2_brain: HeapIndividual, // The AI will play against itself
+    p2_brain: HeapIndividual,
+    pub p1_model_name: String,
+    pub p2_model_name: String,
 }
 
 impl SimulationState {
-    /// Creates a new simulation state from a trained genome.
-    pub fn new(best_genome: Vec<f32>) -> Self {
-        // The `weights` field of `HeapIndividual` is public, so we can construct it directly.
+    /// Creates a new simulation state from two trained genomes.
+    pub fn new(p1_genome: Vec<f32>, p2_genome: Vec<f32>, p1_name: String, p2_name: String) -> Self {
         let p1_brain = HeapIndividual {
-            weights: best_genome.clone(),
+            weights: p1_genome,
         };
         let p2_brain = HeapIndividual {
-            weights: best_genome,
+            weights: p2_genome,
         };
 
         Self {
             game: GameState::new(),
             p1_brain,
             p2_brain,
+            p1_model_name: p1_name,
+            p2_model_name: p2_name,
         }
     }
 

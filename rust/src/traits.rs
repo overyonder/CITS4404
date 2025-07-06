@@ -47,7 +47,7 @@ pub trait Individual: Default + Clone + Send + Sync {
         let child_weights = child.weights_as_mut_slice();
 
         for i in 0..TOTAL_WEIGHTS {
-            child_weights[i] = if rng.gen::<bool>() {
+            child_weights[i] = if rng.random::<bool>() {
                 parent1_weights[i]
             } else {
                 parent2_weights[i]
@@ -68,8 +68,8 @@ pub trait Individual: Default + Clone + Send + Sync {
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
         let weights = self.weights_as_mut_slice();
         for i in 0..TOTAL_WEIGHTS {
-            if rng.gen::<f32>() < config.mutation_rate {
-                weights[i] += rng.gen_range(-1.0..=1.0) * config.mutation_strength;
+            if rng.random::<f32>() < config.mutation_rate {
+                weights[i] += rng.random_range(-1.0..=1.0) * config.mutation_strength;
             }
         }
     }
@@ -125,8 +125,12 @@ pub trait Individual: Default + Clone + Send + Sync {
     fn save(&self, path: &str, config: &Config) -> std::io::Result<()> {
         let mut file = File::create(path)?;
 
+        // Create a mutable copy of the config and set the timestamp
+        let mut config_to_save = config.clone();
+        config_to_save.date_trained = Some(chrono::Utc::now());
+
         // 1. Serialize config to JSON and write its length and data
-        let config_json = serde_json::to_string_pretty(config)
+        let config_json = serde_json::to_string_pretty(&config_to_save)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         let config_bytes = config_json.as_bytes();
         file.write_all(&(config_bytes.len() as u64).to_le_bytes())?;
