@@ -16,7 +16,9 @@ use crate::{
     tui::ui::run_app,
 };
 use clap::Parser;
+use std::fs;
 use std::io::{self, Read};
+use std::path::Path;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -113,6 +115,7 @@ fn main() -> io::Result<()> {
 
 /// Runs the application in headless (CLI) mode with the given configuration.
 fn run_cli(args: Args) {
+    println!("--- RUNNING IN CLI MODE ---"); // Debug print
     let engine = match args.engine.as_str() {
         "stack" => Engine::Stack,
         "simd" => Engine::Simd,
@@ -161,11 +164,24 @@ fn run_cli(args: Args) {
             // In CLI mode, we don't have a UI, so we pass `None` for the sender.
             // The `evolve` function will print progress to the console when sender is `None`.
             let best_individual = pop.evolve(None);
-            if let Some(path) = &$args.save_to {
-                if let Err(e) = best_individual.save(path, &$config) {
-                    error!("Failed to save best individual: {}", e);
+            if let Some(filename) = &$args.save_to {
+                let save_path = Path::new("models").join(filename);
+                // Create the directory if it doesn't exist.
+                if let Some(parent_dir) = save_path.parent() {
+                    if let Err(e) = fs::create_dir_all(parent_dir) {
+                        error!("Failed to create directory {}: {}", parent_dir.display(), e);
+                        return;
+                    }
+                }
+
+                if let Some(path_str) = save_path.to_str() {
+                    if let Err(e) = best_individual.save(path_str, &$config) {
+                        error!("Failed to save best individual: {}", e);
+                    } else {
+                        info!("Best individual saved to {}", path_str);
+                    }
                 } else {
-                    info!("Best individual saved to {}", path);
+                    error!("Invalid save path created.");
                 }
             }
         }};

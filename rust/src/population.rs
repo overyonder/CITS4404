@@ -4,9 +4,9 @@ use crate::{
     traits::Individual,
     tui::training::{MatchupState, TrainingMessage},
 };
-use rand::prelude::*;
+use rand::{prelude::*, rng};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use tracing::{debug, info, trace};
 
@@ -33,11 +33,15 @@ use tracing::{debug, info, trace};
 /// This struct is a good example of managing a collection of evolving agents.
 /// Using a `Vec` instead of a fixed-size array makes the genetic algorithm more
 /// flexible, as the population size can be changed at runtime via configuration.
+
 pub struct Population<I: Individual> {
     /// The population of neural networks (genomes).
     pub individuals: Vec<I>,
-    /// Fitness scores for each individual (updated in a parallel-safe way).
-    pub fitness: Vec<AtomicU32>,
+    /// Fitness scores for each individual. A `u64` packs two `u32` scores:
+    /// - The higher 32 bits are the primary score (e.g., returns + shots).
+    /// - The lower 32 bits are the secondary score (e.g., wins).
+    /// This allows for atomic updates and a simple multi-objective sort.
+    pub fitness: Vec<AtomicU64>,
     /// Evolutionary parameters.
     pub config: Config,
 }
@@ -54,28 +58,9 @@ impl<I: Individual> Population<I> {
         let pop_size = config.population_size;
         Self {
             individuals: (0..pop_size).map(|_| I::default()).collect(),
-            fitness: (0..pop_size).map(|_| AtomicU32::new(0)).collect(),
+            fitness: (0..pop_size).map(|_| AtomicU64::new(0)).collect(),
             config,
         }
-    }
-
-    /// Calculates a unique index for a matchup between individuals `i` and `j`.
-    /// This is used for the "defragmenter"-style UI grid.
-    ///
-    /// # Formula
-    /// The formula treats the matchups as a lower triangular matrix (excluding the diagonal)
-    /// and calculates the flat index for the `(i, j)` pair.
-    fn get_matchup_index(&self, i: usize, j: usize) -> usize {
-        // Ensure i > j for a consistent index, matching the loop structure.
-        let (p1, p2) = if i > j { (i, j) } else { (j, i) };
-
-        // This formula calculates the index for a matchup in a round-robin tournament
-        // for the lower triangle of the matchup matrix (where i > j).
-        // It's based on the sum of an arithmetic series.
-        // For a given `p1`, it has played `p1` games against `0..p1-1`.
-        // The number of games for all individuals before `p1` is the sum 0+1+2+...+(p1-1).
-        let previous_rows_games = p1 * (p1 - 1) / 2;
-        previous_rows_games + p2
     }
 
     /// Evaluates the fitness of all individuals by pitting them against each other
@@ -85,42 +70,56 @@ impl<I: Individual> Population<I> {
         for fitness in self.fitness.iter() {
             fitness.store(0, Ordering::Relaxed);
         }
-        let mut game_state = GameState::new();
 
-        let total_games = self.config.population_size * (self.config.population_size - 1) / 2;
-        trace!(total_games, "Starting sequential round-robin tournament.");
+        let pop_size = self.config.population_size;
+        trace!("Starting sequential round-robin tournament.");
 
-        for i in 0..self.config.population_size {
-            for j in (i + 1)..self.config.population_size {
-                let matchup_index = self.get_matchup_index(i, j);
+        let mut matchup_counter = 0;
+        for i in 0..pop_size {
+            for j in (i + 1)..pop_size {
+                let matchup_index = matchup_counter;
 
+                // Send InProgress message
                 if let Some(tx) = tx {
-                    // Send InProgress update. Ignore error, as we'll catch it in the main loop.
-                    let _ = tx.send(TrainingMessage::MatchupUpdate {
-                        matchup_index,
-                        state: MatchupState::InProgress,
-                    });
+                    if tx
+                        .send(TrainingMessage::MatchupUpdate {
+                            matchup_index,
+                            state: MatchupState::InProgress,
+                        })
+                        .is_err()
+                    {
+                        return; // Exit if UI closed
+                    }
                 }
 
-                game_state.reset();
-                game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
-                let (p1_score, p2_score) = game_state.scores;
+                // Run simulation
+                let mut game_state = GameState::new();
+                let ((left_primary, left_secondary), (right_primary, right_secondary)) =
+                    game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
 
-                if p1_score > p2_score {
-                    self.fitness[i].fetch_add(1, Ordering::Relaxed);
-                } else if p2_score > p1_score {
-                    self.fitness[j].fetch_add(1, Ordering::Relaxed);
-                }
+                // Update fitness
+                let left_packed_score = ((left_primary as u64) << 32) | (left_secondary as u64);
+                let right_packed_score = ((right_primary as u64) << 32) | (right_secondary as u64);
+                self.fitness[i].fetch_add(left_packed_score, Ordering::Relaxed);
+                self.fitness[j].fetch_add(right_packed_score, Ordering::Relaxed);
 
+                // Send Completed message
                 if let Some(tx) = tx {
-                    // Send Completed update
-                    let _ = tx.send(TrainingMessage::MatchupUpdate {
-                        matchup_index,
-                        state: MatchupState::Completed,
-                    });
+                    if tx
+                        .send(TrainingMessage::MatchupUpdate {
+                            matchup_index,
+                            state: MatchupState::Completed,
+                        })
+                        .is_err()
+                    {
+                        return; // Exit if UI closed
+                    }
                 }
+
+                matchup_counter += 1;
             }
         }
+        trace!("Sequential tournament finished.");
     }
 
     /// A parallel version of `evaluate_fitness` using Rayon, sending real-time progress.
@@ -132,7 +131,7 @@ impl<I: Individual> Population<I> {
 
         let pop_size = self.config.population_size;
         let pairs: Vec<(usize, usize)> = (0..pop_size)
-            .flat_map(|i| (i + 1..pop_size).map(move |j| (i, j)))
+            .flat_map(|i| ((i + 1)..pop_size).map(move |j| (i, j)))
             .collect();
 
         trace!(
@@ -142,45 +141,49 @@ impl<I: Individual> Population<I> {
 
         if let Some(tx) = tx {
             // We have a sender, use for_each_with to clone it for each thread.
-            pairs
-                .par_iter()
-                .for_each_with(tx.clone(), |thread_tx, &(i, j)| {
-                    let matchup_index = self.get_matchup_index(i, j);
-
+            pairs.par_iter().enumerate().for_each_with(
+                tx.clone(),
+                |thread_tx, (matchup_index, &(i, j))| {
                     let _ = thread_tx.send(TrainingMessage::MatchupUpdate {
                         matchup_index,
                         state: MatchupState::InProgress,
                     });
 
                     let mut game_state = GameState::new();
-                    game_state.reset();
-                    game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
-                    let (p1_score, p2_score) = game_state.scores;
+                    let ((left_primary, left_secondary), (right_primary, right_secondary)) =
+                        game_state.simulate(
+                            &self.individuals[i],
+                            &self.individuals[j],
+                            &self.config,
+                        );
 
-                    if p1_score > p2_score {
-                        self.fitness[i].fetch_add(1, Ordering::Relaxed);
-                    } else if p2_score > p1_score {
-                        self.fitness[j].fetch_add(1, Ordering::Relaxed);
-                    }
+                    // Pack scores into u64 and update atomically
+                    let left_packed_score = ((left_primary as u64) << 32) | (left_secondary as u64);
+                    let right_packed_score =
+                        ((right_primary as u64) << 32) | (right_secondary as u64);
+
+                    self.fitness[i].fetch_add(left_packed_score, Ordering::Relaxed);
+                    self.fitness[j].fetch_add(right_packed_score, Ordering::Relaxed);
 
                     let _ = thread_tx.send(TrainingMessage::MatchupUpdate {
                         matchup_index,
                         state: MatchupState::Completed,
                     });
-                });
+                },
+            );
         } else {
             // No sender, just run the simulations.
             pairs.par_iter().for_each(|&(i, j)| {
                 let mut game_state = GameState::new();
-                game_state.reset();
-                game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
-                let (p1_score, p2_score) = game_state.scores;
+                let ((left_primary, left_secondary), (right_primary, right_secondary)) =
+                    game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
 
-                if p1_score > p2_score {
-                    self.fitness[i].fetch_add(1, Ordering::Relaxed);
-                } else if p2_score > p1_score {
-                    self.fitness[j].fetch_add(1, Ordering::Relaxed);
-                }
+                // Pack scores into u64 and update atomically
+                let left_packed_score = ((left_primary as u64) << 32) | (left_secondary as u64);
+                let right_packed_score = ((right_primary as u64) << 32) | (right_secondary as u64);
+
+                self.fitness[i].fetch_add(left_packed_score, Ordering::Relaxed);
+                self.fitness[j].fetch_add(right_packed_score, Ordering::Relaxed);
             });
         }
         trace!("Concurrent round-robin tournament finished.");
@@ -189,32 +192,81 @@ impl<I: Individual> Population<I> {
     /// Selects the fittest individuals and returns their indices, sorted by fitness.
     pub fn select_elites(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.config.population_size).collect();
-        indices.sort_by_key(|&i| std::cmp::Reverse(self.fitness[i].load(Ordering::Relaxed)));
+        // Sort by the packed u64 fitness score. Since the primary score is in the
+        // most significant bits, this automatically handles the multi-objective sort.
+        indices.sort_by_key(|&i| self.fitness[i].load(Ordering::Relaxed));
+        indices.reverse(); // Higher scores are better
         indices
     }
 
-    /// Fills the next generation with offspring from elites, using crossover and mutation.
+    /// Fills the next generation with offspring from elites, using a selectable
+    /// reproduction strategy.
     fn recombination_and_mutation(&mut self, sorted_indices: &[usize]) {
-        let mut rng = rand::rng();
-        let elite_count = self.config.elite_count;
-        let population_size = self.config.population_size;
+        let mut next_generation = Vec::with_capacity(self.config.population_size);
+        let mut rng = rng();
 
-        let elite_parent_indices = &sorted_indices[0..elite_count];
+        match self.config.reproduction_strategy {
+            crate::config::ReproductionStrategy::CppEquivalent => {
+                // C++-equivalent reproduction strategy.
+                let survivor_count = (self.config.population_size as f32).sqrt() as usize;
 
-        for i in elite_count..population_size {
-            let individual_to_replace_idx = sorted_indices[i];
+                // 1. Elitism: Carry over survivors.
+                for i in 0..survivor_count {
+                    next_generation.push(self.individuals[sorted_indices[i]].clone());
+                }
 
-            let p1_idx = *elite_parent_indices.choose(&mut rng).unwrap();
-            let p2_idx = *elite_parent_indices.choose(&mut rng).unwrap();
+                // 2. Crossover: All pairs of survivors.
+                let mut current_member_idx = survivor_count;
+                'crossover: for i in 0..survivor_count {
+                    for j in (i + 1)..survivor_count {
+                        if current_member_idx >= self.config.population_size {
+                            break 'crossover;
+                        }
+                        let parent1 = &self.individuals[sorted_indices[i]];
+                        let parent2 = &self.individuals[sorted_indices[j]];
+                        let offspring = parent1.crossover(parent2, &mut rng);
+                        next_generation.push(offspring);
+                        current_member_idx += 1;
+                    }
+                }
 
-            let p1 = &self.individuals[p1_idx];
-            let p2 = &self.individuals[p2_idx];
+                // 3. Mutation: Fill the rest with mutated survivors.
+                while current_member_idx < self.config.population_size {
+                    for i in 0..survivor_count {
+                        if current_member_idx >= self.config.population_size {
+                            break;
+                        }
+                        let mut offspring = self.individuals[sorted_indices[i]].clone();
+                        offspring.mutate(&mut rng, &self.config);
+                        next_generation.push(offspring);
+                        current_member_idx += 1;
+                    }
+                }
+            }
+            crate::config::ReproductionStrategy::Modern => {
+                // Modern Rust-native reproduction strategy.
+                let elite_count = self.config.elite_count;
 
-            let mut child = p1.crossover(p2, &mut rng);
-            child.mutate(&mut rng, &self.config);
+                // 1. Elitism: Carry over the best individuals directly.
+                for i in 0..elite_count {
+                    next_generation.push(self.individuals[sorted_indices[i]].clone());
+                }
 
-            self.individuals[individual_to_replace_idx] = child;
+                // 2. Fill the rest with children from crossover and mutation of elites.
+                for _ in elite_count..self.config.population_size {
+                    let parent1_idx = sorted_indices[rng.random_range(0..elite_count)];
+                    let parent2_idx = sorted_indices[rng.random_range(0..elite_count)];
+                    let mut offspring = self.individuals[parent1_idx]
+                        .crossover(&self.individuals[parent2_idx], &mut rng);
+                    offspring.mutate(&mut rng, &self.config);
+                    next_generation.push(offspring);
+                }
+            }
         }
+
+        // Ensure the population size is correct.
+        next_generation.truncate(self.config.population_size);
+        self.individuals = next_generation;
     }
 
     /// Runs the complete evolutionary process for a specified number of generations,
@@ -279,13 +331,19 @@ impl<I: Individual> Population<I> {
             let sorted_indices = self.select_elites();
             trace!("Elite selection complete.");
 
-            let best_fitness = self.fitness[sorted_indices[0]].load(Ordering::Relaxed);
-            let worst_fitness = self.fitness[sorted_indices[self.config.population_size - 1]]
+            let best_fitness_packed = self.fitness[sorted_indices[0]].load(Ordering::Relaxed);
+            let worst_fitness_packed = self.fitness
+                [sorted_indices[self.config.population_size - 1]]
                 .load(Ordering::Relaxed);
+
+            // Unpack the primary score for reporting
+            let best_fitness = (best_fitness_packed >> 32) as f32;
+            let worst_fitness = (worst_fitness_packed >> 32) as f32;
+
             let average_fitness = self
                 .fitness
                 .iter()
-                .map(|f| f.load(Ordering::Relaxed))
+                .map(|f| (f.load(Ordering::Relaxed) >> 32) as u32) // Use primary score for average
                 .sum::<u32>() as f32
                 / self.config.population_size as f32;
 

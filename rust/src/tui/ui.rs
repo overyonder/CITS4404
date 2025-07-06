@@ -35,7 +35,8 @@ fn handle_events(app: &mut App) -> Result<()> {
     // Handle non-blocking state updates (e.g., background threads, simulation steps).
     match app.state {
         AppState::Training => {
-            if let Ok(msg) = app.rx.as_ref().unwrap().try_recv() {
+            // Drain the message queue on each tick to prevent the UI from lagging.
+            while let Ok(msg) = app.rx.as_ref().unwrap().try_recv() {
                 if let Some(ts) = app.training.as_mut() {
                     match msg {
                         TrainingMessage::GenerationStart { total_matchups } => {

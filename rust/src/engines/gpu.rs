@@ -265,7 +265,7 @@ impl Individual for GpuIndividual<'_> {
             }
         }
         // After mutating the CPU-side cache, update the GPU buffer.
-        self.set_weights_on_gpu(&self.weights.clone());
+        self.sync_weights_to_gpu();
     }
 
     fn weights_as_slice(&self) -> &[f32] {
@@ -273,7 +273,7 @@ impl Individual for GpuIndividual<'_> {
     }
 
     fn weights_as_mut_slice(&mut self) -> &mut [f32] {
-        // Note: If this slice is mutated, the caller is responsible for calling `set_weights_on_gpu`
+        // Note: If this slice is mutated, the caller is responsible for calling `sync_weights_to_gpu`
         // to maintain consistency between the CPU cache and the GPU buffer. The `Individual`
         // trait's default `mutate` implementation does not do this, which is why `GpuIndividual`
         // provides its own `mutate` implementation that correctly handles synchronization.
@@ -443,13 +443,11 @@ impl<'a> GpuIndividual<'a> {
         }
     }
 
-    /// Writes the provided weight slice to the GPU buffer and updates the CPU cache.
-    fn set_weights_on_gpu(&mut self, weights: &[f32]) {
+    /// Synchronizes the CPU-side weight cache to the GPU buffer.
+    fn sync_weights_to_gpu(&self) {
         self.context
             .queue
-            .write_buffer(&self.weights_buffer, 0, bytemuck::cast_slice(weights));
-        // Also update the CPU-side cache to ensure consistency.
-        self.weights.copy_from_slice(weights);
+            .write_buffer(&self.weights_buffer, 0, bytemuck::cast_slice(&self.weights));
     }
 
     /// Reads the weights from the GPU buffer back to the CPU.

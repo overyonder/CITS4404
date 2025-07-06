@@ -15,23 +15,23 @@
 // ----------------------------------------------------------------------------
 
 /// The width of the Pong game area in pixels.
-pub const WIDTH: u16 = 1000;
+pub const WIDTH: u16 = 400;
 
 /// The height of the Pong game area in pixels.
 ///
 /// # Teaching Note
 /// Using `WIDTH` and `HEIGHT` is a standard convention for 2D spaces, making the
 /// code more intuitive to read than alternatives like `LENGTH`.
-pub const HEIGHT: u16 = 1000;
+pub const HEIGHT: u16 = 300;
 
 /// The width of each paddle in pixels.
 pub const PADDLE_WIDTH: u16 = 1;
 
 /// The height of each paddle in pixels.
-pub const PADDLE_HEIGHT: u16 = 100;
+pub const PADDLE_HEIGHT: u16 = (HEIGHT / 8) as u16; // 37.5 in C++
 
 /// The maximum score before a game ends.
-pub const MAX_SCORE: u8 = 10;
+pub const MAX_SCORE: u8 = 1;
 
 // ----------------------------------------------------------------------------
 // Physics and Simulation Constants
@@ -45,24 +45,24 @@ pub const MAX_SCORE: u8 = 10;
 pub const TICK_RATE: u16 = 60;
 
 /// The maximum velocity of a paddle in pixels per tick.
-pub const PADDLE_MAX_VEL: f32 = 20.0;
+pub const PADDLE_MAX_VEL: f32 = HEIGHT as f32 / TICK_RATE as f32; // 5.0 in C++
 
 /// The radius of the ball in pixels.
 ///
 /// # Teaching Note
 /// Using a radius allows for more accurate collision detection against the ball's edge
 /// rather than its center point.
-pub const BALL_RADIUS: f32 = 10.0;
+pub const BALL_RADIUS: f32 = 0.0; // C++ version is a point
 
 /// The initial speed of the ball in pixels per tick.
-pub const BALL_INITIAL_SPEED: f32 = 8.0;
+pub const BALL_INITIAL_SPEED: f32 = 9.42; // Corresponds to C++ initial velocity vector
 
 /// The maximum speed the ball can reach.
 ///
 /// # Teaching Note
 /// Clamping the ball's speed is important for game balance, preventing it from
 /// becoming uncontrollably fast after many paddle hits.
-pub const BALL_MAX_SPEED: f32 = 25.0;
+pub const BALL_MAX_SPEED: f32 = 100.0; // C++ has no max, set high
 
 /// The minimum y-coordinate for a paddle's center.
 /// This is calculated to be half the paddle's height, preventing any part of the

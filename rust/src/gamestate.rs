@@ -40,6 +40,7 @@ pub struct GameState {
     pub ball_vel: (f32, f32),
     pub scores: (u8, u8),
     pub returns: (u32, u32),
+    pub shots: (u32, u32),
 }
 
 impl GameState {
@@ -54,6 +55,7 @@ impl GameState {
             ball_vel: (0.0, 0.0), // Velocity is set by reset_ball
             scores: (0, 0),
             returns: (0, 0),
+            shots: (0, 0),
         };
         new_state.reset_ball(rand::rng().random()); // Set initial ball state
         new_state
@@ -67,6 +69,7 @@ impl GameState {
         self.paddle2_vel = 0.0;
         self.scores = (0, 0);
         self.returns = (0, 0);
+        self.shots = (0, 0);
         self.reset_ball(rand::rng().random());
     }
 
@@ -79,12 +82,12 @@ impl GameState {
     /// inputs from disproportionately influencing the outcome.
     pub fn get_inputs_for_player1(&self) -> [f32; 8] {
         [
-            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0,  // Own Paddle Y
+            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0, // Own Paddle Y
             self.paddle1_vel / PADDLE_MAX_VEL,              // Own Paddle Vel Y
-            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0,  // Opponent Paddle Y
+            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0, // Opponent Paddle Y
             self.paddle2_vel / PADDLE_MAX_VEL,              // Opponent Paddle Vel Y
-            (2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0,    // Ball X
-            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,   // Ball Y
+            (2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0,   // Ball X
+            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,  // Ball Y
             self.ball_vel.0 / BALL_MAX_SPEED,               // Ball Vel X
             self.ball_vel.1 / BALL_MAX_SPEED,               // Ball Vel Y
         ]
@@ -101,12 +104,12 @@ impl GameState {
     /// - The roles of the paddles are swapped (paddle2 becomes 'own', paddle1 becomes 'opponent').
     pub fn get_inputs_for_player2(&self) -> [f32; 8] {
         [
-            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0,  // Own Paddle Y (was paddle2)
+            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0, // Own Paddle Y (was paddle2)
             self.paddle2_vel / PADDLE_MAX_VEL,              // Own Paddle Vel Y
-            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0,  // Opponent Paddle Y (was paddle1)
+            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0, // Opponent Paddle Y (was paddle1)
             self.paddle1_vel / PADDLE_MAX_VEL,              // Opponent Paddle Vel Y
             -((2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0), // Inverted Ball X
-            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,   // Ball Y
+            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,  // Ball Y
             -self.ball_vel.0 / BALL_MAX_SPEED,              // Inverted Ball Vel X
             self.ball_vel.1 / BALL_MAX_SPEED,               // Ball Vel Y
         ]
@@ -208,8 +211,8 @@ impl GameState {
             let paddle_bottom = paddle1_box.1 + PADDLE_HEIGHT as f32 / 2.0;
             if self.ball_pos.1 >= paddle_top && self.ball_pos.1 <= paddle_bottom {
                 self.ball_vel.0 = self.ball_vel.0.abs(); // Reflect ball horizontally
-                // Impart some of the paddle's velocity to the ball for more dynamic rallies.
-                // The 0.4 factor acts as a coefficient of energy transfer.
+                                                         // Impart some of the paddle's velocity to the ball for more dynamic rallies.
+                                                         // The 0.4 factor acts as a coefficient of energy transfer.
                 self.ball_vel.1 += self.paddle1_vel * 0.4;
                 self.returns.0 += 1;
             }
@@ -231,6 +234,45 @@ impl GameState {
             self.ball_vel.1 = (self.ball_vel.1 / speed) * BALL_MAX_SPEED;
         }
 
+        // A shot is a tick in which the ball is headed to score.
+        // This logic projects the ball's trajectory to the paddle line and checks if the
+        // paddle can intercept it. This is derived from the original C++ implementation.
+        if self.ball_vel.0 < 0.0 {
+            // Ball moving left, potential shot for player 2 (right)
+            // Project ball's path to the left wall (x=0)
+            if self.ball_vel.0.abs() > f32::EPSILON {
+                let time_to_wall = -self.ball_pos.0 / self.ball_vel.0;
+                let shot_y = self.ball_pos.1 + self.ball_vel.1 * time_to_wall;
+
+                // Check if the projected position is on the screen
+                if shot_y >= 0.0 && shot_y <= HEIGHT as f32 {
+                    let paddle_top = self.paddle1_pos - PADDLE_HEIGHT as f32 / 2.0;
+                    let paddle_bottom = self.paddle1_pos + PADDLE_HEIGHT as f32 / 2.0;
+                    // If the projected position is outside the paddle's reach, it's a successful shot
+                    if shot_y < paddle_top || shot_y > paddle_bottom {
+                        self.shots.1 += 1; // right player's shot
+                    }
+                }
+            }
+        } else if self.ball_vel.0 > 0.0 {
+            // Ball moving right, potential shot for player 1 (left)
+            // Project ball's path to the right wall (x=WIDTH)
+            if self.ball_vel.0.abs() > f32::EPSILON {
+                let time_to_wall = (WIDTH as f32 - self.ball_pos.0) / self.ball_vel.0;
+                let shot_y = self.ball_pos.1 + self.ball_vel.1 * time_to_wall;
+
+                // Check if the projected position is on the screen
+                if shot_y >= 0.0 && shot_y <= HEIGHT as f32 {
+                    let paddle_top = self.paddle2_pos - PADDLE_HEIGHT as f32 / 2.0;
+                    let paddle_bottom = self.paddle2_pos + PADDLE_HEIGHT as f32 / 2.0;
+                    // If the projected position is outside the paddle's reach, it's a successful shot
+                    if shot_y < paddle_top || shot_y > paddle_bottom {
+                        self.shots.0 += 1; // left player's shot
+                    }
+                }
+            }
+        }
+
         // Score detection. Note that we check if the *entire ball* has passed the screen edge.
         // # Teaching Note
         // A common mistake is to only check the ball's center (`ball_pos.0 < 0.0`).
@@ -248,26 +290,28 @@ impl GameState {
     /// Runs a full simulation episode between two individuals until a winner is decided.
     ///
     /// # Returns
-    /// A tuple `(left_returns, right_returns)` representing the fitness score for each individual.
+    /// A nested tuple `((left_primary, left_secondary), (right_primary, right_secondary))`
+    /// representing the two-component fitness score for each individual.
     ///
     /// # Algorithm
-    /// 1.  Reset scores, returns, and the ball's position.
-    /// 2.  Loop for a maximum number of ticks (e.g., 30 seconds worth).
-    /// 3.  In each tick, check for a game-over condition (max score reached).
-    /// 4.  Call `self.tick()` to advance the simulation by one step.
-    /// 5.  Return the total number of successful returns for each player.
-    pub fn simulate<I: Individual>(&mut self, left: &I, right: &I, config: &Config) -> (u32, u32) {
-        self.scores = (0, 0);
-        self.returns = (0, 0);
-        self.reset_ball(rand::rng().random());
+    /// 1.  Reset all game state variables.
+    /// 2.  Loop until a max score is reached or a timeout occurs.
+    /// 3.  Call `self.tick()` to advance the simulation by one step.
+    /// 4.  Calculate and return the final fitness scores based on the configured fitness function.
+    pub fn simulate<I: Individual>(
+        &mut self,
+        left: &I,
+        right: &I,
+        config: &Config,
+    ) -> ((u32, u32), (u32, u32)) {
+        self.reset();
 
         // # Teaching Note
-        // The simulation runs for a maximum number of ticks (e.g., 30 seconds worth).
-        // This timeout is a crucial safeguard to prevent infinite loops. For example, if two
-        // individuals learn a passive strategy of just sitting in the middle of the screen
-        // without moving, a game could theoretically last forever. The timeout ensures that
-        // every simulation terminates.
-        for _tick in 0..(TICK_RATE as u32 * 30) {
+        // The simulation runs for a maximum number of ticks. In the C++ version, this was
+        // calculated based on game parameters to be a high number, effectively a timeout.
+        // We'll use a fixed large number of ticks to serve the same purpose.
+        let timelimit = 2 * 16 * MAX_SCORE as u32 * WIDTH as u32; // Generous timeout
+        for _tick in 0..timelimit {
             if self.scores.0 >= MAX_SCORE || self.scores.1 >= MAX_SCORE {
                 break;
             }
@@ -276,11 +320,18 @@ impl GameState {
 
         // Calculate fitness based on the selected function
         match config.fitness_func {
-            // Rewards survival (frames) and returns. Encourages defensive, long rallies.
-            FitnessFunc::CppEquivalent => self.returns,
+            // C++ equivalent fitness: (primary, secondary) where primary is returns + shots
+            // and secondary is wins. This requires a multi-objective sort in the population.
+            FitnessFunc::CppEquivalent => {
+                let left_wins = if self.scores.0 > self.scores.1 { 1 } else { 0 };
+                let right_wins = if self.scores.1 > self.scores.0 { 1 } else { 0 };
+                let left_primary = self.returns.0 + self.shots.0;
+                let right_primary = self.returns.1 + self.shots.1;
+                ((left_primary, left_wins), (right_primary, right_wins))
+            }
 
-            // Rewards returns and winning the match. Encourages efficient, balanced play.
-            // A win is worth a bonus of 5 returns.
+            // The other fitness functions are kept for experimentation but adapted to the new
+            // tuple return type. We'll use 0 for the secondary objective.
             FitnessFunc::Balanced => {
                 let mut left_score = self.returns.0;
                 let mut right_score = self.returns.1;
@@ -289,10 +340,8 @@ impl GameState {
                 } else if self.scores.1 > self.scores.0 {
                     right_score += 5;
                 }
-                (left_score, right_score)
+                ((left_score, 0), (right_score, 0))
             }
-
-            // Heavily rewards winning the match. Encourages aggressive, decisive strategies.
             FitnessFunc::Performance => {
                 let mut left_score = self.returns.0;
                 let mut right_score = self.returns.1;
@@ -302,7 +351,7 @@ impl GameState {
                 if self.scores.1 >= MAX_SCORE {
                     right_score += 10;
                 }
-                (left_score, right_score)
+                ((left_score, 0), (right_score, 0))
             }
         }
     }

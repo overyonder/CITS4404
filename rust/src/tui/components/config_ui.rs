@@ -1,7 +1,7 @@
 //! The configuration screen component.
 
 use crate::{
-    config::{Activation, Config, Engine, FitnessFunc},
+    config::{Activation, Config, Engine, FitnessFunc, ReproductionStrategy},
     engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
     population::Population,
     tui::{
@@ -34,6 +34,10 @@ fn get_config_items(config: &Config) -> Vec<(&'static str, String)> {
         ("Activation", config.activation.to_string()),
         ("Concurrent", config.concurrent.to_string()),
         ("Fitness Func", config.fitness_func.to_string()),
+        (
+            "Reproduction",
+            config.reproduction_strategy.to_string(),
+        ),
     ]
 }
 
@@ -257,6 +261,13 @@ fn change_config_value(app: &mut App, increase: bool) {
                 0 => FitnessFunc::CppEquivalent,
                 1 => FitnessFunc::Balanced,
                 _ => FitnessFunc::Performance,
+            };
+        }
+        9 => {
+            // Reproduction Strategy
+            config.reproduction_strategy = match config.reproduction_strategy {
+                ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
+                ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
             };
         }
         _ => {}
