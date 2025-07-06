@@ -97,10 +97,6 @@ fn dispatch_dot(a: &[f32], b: &[f32]) -> f32 {
 }
 
 impl Individual for SimdIndividual {
-    fn name() -> &'static str {
-        "SIMD"
-    }
-
     fn forward_propagate(&self, input: &[f32; INPUT_SIZE], activation: Activation) -> [f32; OUTPUT_SIZE] {
         let mut l1_outputs = [0.0; HIDDEN1_SIZE];
         let mut l2_outputs = [0.0; HIDDEN2_SIZE];

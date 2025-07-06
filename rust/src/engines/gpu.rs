@@ -158,10 +158,6 @@ impl Clone for GpuIndividual<'_> {
 }
 
 impl Individual for GpuIndividual<'_> {
-    fn name() -> &'static str {
-        "GPU"
-    }
-
     /// Performs a forward pass on the GPU using a compute shader.
     fn forward_propagate(
         &self,

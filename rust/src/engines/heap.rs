@@ -1,7 +1,7 @@
 use crate::{config::Activation, constants::*, traits::Individual, utils};
+use bytemuck;
 use rand::Rng;
 use std::io::Read;
-use bytemuck;
 
 /// A neural network individual whose weights are stored in a heap-allocated `Vec<f32>`.
 ///
@@ -43,11 +43,11 @@ impl Default for HeapIndividual {
 }
 
 impl Individual for HeapIndividual {
-    fn name() -> &'static str {
-        "Heap"
-    }
-
-    fn forward_propagate(&self, input: &[f32; INPUT_SIZE], activation: Activation) -> [f32; OUTPUT_SIZE] {
+    fn forward_propagate(
+        &self,
+        input: &[f32; INPUT_SIZE],
+        activation: Activation,
+    ) -> [f32; OUTPUT_SIZE] {
         let mut l1_outputs = [0.0; HIDDEN1_SIZE];
         let mut l2_outputs = [0.0; HIDDEN2_SIZE];
         let mut output = [0.0; OUTPUT_SIZE];

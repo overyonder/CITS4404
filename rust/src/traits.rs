@@ -23,12 +23,6 @@ use std::io::Write;
 /// This makes the system highly extensible, allowing new network engines to be added without
 /// changing the core genetic algorithm logic.
 pub trait Individual: Default + Clone + Send + Sync {
-    /// Returns a human-readable name for the individual's implementation type.
-    /// Used for display purposes in the UI and logs.
-    fn name() -> &'static str
-    where
-        Self: Sized;
-
     /// Performs the neural network's forward propagation.
     ///
     /// Takes the game state as input and returns the network's output (e.g., paddle movement).

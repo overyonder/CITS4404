@@ -1,9 +1,9 @@
 //! A neural network engine where all weights are stored in a single, stack-allocated array.
 
 use crate::{config::Activation, constants::*, traits::Individual, utils};
+use bytemuck;
 use rand::Rng;
 use std::io::Read;
-use bytemuck;
 
 /// A neural network individual using a stack-allocated, fixed-size array for its weights.
 ///
@@ -28,10 +28,6 @@ pub struct StackIndividual {
 }
 
 impl Individual for StackIndividual {
-    fn name() -> &'static str {
-        "Stack"
-    }
-
     /// Performs a forward pass using manually sliced portions of the flat weight array.
     ///
     /// # Algorithm
@@ -46,7 +42,11 @@ impl Individual for StackIndividual {
     /// network, often visualized as interconnected layers, is actually implemented under the
     /// hood using flat arrays and loops. Understanding this mapping is key to creating
     /// efficient neural network engines.
-    fn forward_propagate(&self, input: &[f32; INPUT_SIZE], activation: Activation) -> [f32; OUTPUT_SIZE] {
+    fn forward_propagate(
+        &self,
+        input: &[f32; INPUT_SIZE],
+        activation: Activation,
+    ) -> [f32; OUTPUT_SIZE] {
         let mut l1_outputs = [0.0; HIDDEN1_SIZE];
         let mut l2_outputs = [0.0; HIDDEN2_SIZE];
         let mut output = [0.0; OUTPUT_SIZE];
@@ -90,7 +90,7 @@ impl Individual for StackIndividual {
         &self.weights
     }
 
-        fn weights_as_mut_slice(&mut self) -> &mut [f32] {
+    fn weights_as_mut_slice(&mut self) -> &mut [f32] {
         &mut self.weights
     }
 
