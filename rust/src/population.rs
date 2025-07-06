@@ -8,7 +8,7 @@ use rand::prelude::*;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 /// Represents a population of individuals (neural networks) for evolutionary training.
 ///
@@ -68,12 +68,14 @@ impl<I: Individual> Population<I> {
     fn get_matchup_index(&self, i: usize, j: usize) -> usize {
         // Ensure i > j for a consistent index, matching the loop structure.
         let (p1, p2) = if i > j { (i, j) } else { (j, i) };
-        let pop_size = self.config.population_size;
 
-        // This formula calculates an index into a 1D array representing the
-        // upper triangle of the matchup matrix.
-        // Sum of games for rows before p1 + offset into p1's row.
-        p1 * pop_size - p1 * (p1 + 1) / 2 + p2 - p1 - 1
+        // This formula calculates the index for a matchup in a round-robin tournament
+        // for the lower triangle of the matchup matrix (where i > j).
+        // It's based on the sum of an arithmetic series.
+        // For a given `p1`, it has played `p1` games against `0..p1-1`.
+        // The number of games for all individuals before `p1` is the sum 0+1+2+...+(p1-1).
+        let previous_rows_games = p1 * (p1 - 1) / 2;
+        previous_rows_games + p2
     }
 
     /// Evaluates the fitness of all individuals by pitting them against each other
@@ -239,7 +241,10 @@ impl<I: Individual> Population<I> {
     /// UI, allowing either to be changed independently. If the UI thread closes, the `tx.send`
     /// operations will fail, allowing the evolution to terminate gracefully.
     pub fn evolve(&mut self, tx: Option<mpsc::Sender<TrainingMessage>>) -> I {
-        debug!(generations = self.config.generations, "Starting evolution loop.");
+        debug!(
+            generations = self.config.generations,
+            "Starting evolution loop."
+        );
         for gen in 0..self.config.generations {
             debug!(generation = gen + 1, "Starting generation.");
 
@@ -252,7 +257,10 @@ impl<I: Individual> Population<I> {
 
             // Signal the start of a new generation.
             if let Some(tx) = &tx {
-                if tx.send(TrainingMessage::GenerationStart { total_matchups }).is_err() {
+                if tx
+                    .send(TrainingMessage::GenerationStart { total_matchups })
+                    .is_err()
+                {
                     debug!("Evolution stopped early: UI channel closed.");
                     let sorted_indices = self.select_elites();
                     return self.individuals[sorted_indices[0]].clone();
@@ -295,9 +303,21 @@ impl<I: Individual> Population<I> {
             if let Some(tx) = &tx {
                 if tx.send(progress_message).is_err() {
                     // Early exit requested by the caller. Return the best individual found so far.
-                    debug!(generation = gen + 1, "Evolution stopped early: UI channel closed.");
+                    debug!(
+                        generation = gen + 1,
+                        "Evolution stopped early: UI channel closed."
+                    );
                     return self.individuals[sorted_indices[0]].clone();
                 }
+            } else {
+                // CLI mode: print progress to stdout.
+                info!(
+                    "Gen: {:3} | Best Fitness: {:7.2} | Avg Fitness: {:7.2} | Worst Fitness: {:7.2}",
+                    gen + 1,
+                    best_fitness,
+                    average_fitness,
+                    worst_fitness
+                );
             }
 
             trace!("Performing recombination and mutation...");

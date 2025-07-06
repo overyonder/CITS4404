@@ -155,8 +155,8 @@ impl Default for Config {
 /// compared, which is useful in the TUI for showing the selected item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Activation {
-    /// **Hyperbolic Tangent:** A smooth, zero-centered function that squashes values to `[-1, 1]`.
-    /// Good for general purpose use.
+        /// **Hyperbolic Tangent:** A smooth, zero-centered function that squashes values to `[-1, 1]`.
+    /// This is the C++ equivalent activation function.
     #[default]
     Tanh,
     /// **Rectified Linear Unit:** Outputs `max(0, x)`. It's computationally very efficient
@@ -165,6 +165,9 @@ pub enum Activation {
     /// **Arctangent:** Similar to Tanh, it's a smooth function that squashes values,
     /// but to the range `[-PI/2, PI/2]`.
     Atan,
+    /// **Sigmoid:** A smooth function that squashes values to the range `[0, 1]`. It's a classic
+    /// choice but can suffer from the vanishing gradient problem.
+    Sigmoid,
     /// **Linear:** A no-op function (`f(x) = x`). Using this removes non-linearity, turning
     /// the neural network into a simple linear regression model.
     Linear,
@@ -176,6 +179,7 @@ impl fmt::Display for Activation {
             Activation::Tanh => write!(f, "Tanh"),
             Activation::Relu => write!(f, "ReLU"),
             Activation::Atan => write!(f, "Atan"),
+            Activation::Sigmoid => write!(f, "Sigmoid"),
             Activation::Linear => write!(f, "Linear"),
         }
     }

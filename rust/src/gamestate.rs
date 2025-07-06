@@ -79,14 +79,14 @@ impl GameState {
     /// inputs from disproportionately influencing the outcome.
     pub fn get_inputs_for_player1(&self) -> [f32; 8] {
         [
-            self.ball_pos.0 / WIDTH as f32,    // Ball X
-            self.ball_pos.1 / HEIGHT as f32,   // Ball Y
-            self.ball_vel.0 / BALL_MAX_SPEED,  // Ball Vel X
-            self.ball_vel.1 / BALL_MAX_SPEED,  // Ball Vel Y
-            self.paddle1_pos / HEIGHT as f32,  // Own Paddle Y
-            self.paddle1_vel / PADDLE_MAX_VEL, // Own Paddle Vel Y
-            self.paddle2_pos / HEIGHT as f32,  // Opponent Paddle Y
-            self.paddle2_vel / PADDLE_MAX_VEL, // Opponent Paddle Vel Y
+            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0,  // Own Paddle Y
+            self.paddle1_vel / PADDLE_MAX_VEL,              // Own Paddle Vel Y
+            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0,  // Opponent Paddle Y
+            self.paddle2_vel / PADDLE_MAX_VEL,              // Opponent Paddle Vel Y
+            (2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0,    // Ball X
+            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,   // Ball Y
+            self.ball_vel.0 / BALL_MAX_SPEED,               // Ball Vel X
+            self.ball_vel.1 / BALL_MAX_SPEED,               // Ball Vel Y
         ]
     }
 
@@ -101,14 +101,14 @@ impl GameState {
     /// - The roles of the paddles are swapped (paddle2 becomes 'own', paddle1 becomes 'opponent').
     pub fn get_inputs_for_player2(&self) -> [f32; 8] {
         [
-            (WIDTH as f32 - self.ball_pos.0) / WIDTH as f32, // Flipped Ball X
-            self.ball_pos.1 / HEIGHT as f32,                 // Ball Y
-            -self.ball_vel.0 / BALL_MAX_SPEED,               // Flipped Ball Vel X
-            self.ball_vel.1 / BALL_MAX_SPEED,                // Ball Vel Y
-            self.paddle2_pos / HEIGHT as f32,                // Own Paddle Y (is paddle2)
-            self.paddle2_vel / PADDLE_MAX_VEL,               // Own Paddle Vel Y
-            self.paddle1_pos / HEIGHT as f32,                // Opponent Paddle Y (is paddle1)
-            self.paddle1_vel / PADDLE_MAX_VEL,               // Opponent Paddle Vel Y
+            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0,  // Own Paddle Y (was paddle2)
+            self.paddle2_vel / PADDLE_MAX_VEL,              // Own Paddle Vel Y
+            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0,  // Opponent Paddle Y (was paddle1)
+            self.paddle1_vel / PADDLE_MAX_VEL,              // Opponent Paddle Vel Y
+            -((2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0), // Inverted Ball X
+            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,   // Ball Y
+            -self.ball_vel.0 / BALL_MAX_SPEED,              // Inverted Ball Vel X
+            self.ball_vel.1 / BALL_MAX_SPEED,               // Ball Vel Y
         ]
     }
 

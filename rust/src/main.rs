@@ -141,6 +141,7 @@ fn run_cli(args: Args) {
             "tanh" => Activation::Tanh,
             "relu" => Activation::Relu,
             "atan" => Activation::Atan,
+            "sigmoid" => Activation::Sigmoid,
             "linear" => Activation::Linear,
             _ => {
                 warn!("Unknown activation: {}. Using default.", act);

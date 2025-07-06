@@ -221,17 +221,20 @@ fn change_config_value(app: &mut App, increase: bool) {
                 Activation::Relu => 1,
                 Activation::Atan => 2,
                 Activation::Linear => 3,
+                Activation::Sigmoid => 4,
             };
             let next_index = if increase {
-                (current_activation_index + 1) % 4
+                (current_activation_index + 1) % 5
             } else {
-                (current_activation_index + 3) % 4
+                (current_activation_index + 4) % 5
             };
             config.activation = match next_index {
                 0 => Activation::Tanh,
                 1 => Activation::Relu,
                 2 => Activation::Atan,
-                _ => Activation::Linear,
+                3 => Activation::Linear,
+                4 => Activation::Sigmoid,
+                _ => Activation::default(),
             };
         }
         7 => {

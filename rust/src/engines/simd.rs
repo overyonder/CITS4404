@@ -106,33 +106,36 @@ impl Individual for SimdIndividual {
         let (l2_weights, l3_weights) = rest.split_at(L2_WEIGHTS);
 
         // Layer 1: Input -> Hidden 1
-        for i in 0..HIDDEN1_SIZE {
-            let start = i * (INPUT_SIZE + 1);
-            let end = start + INPUT_SIZE;
-            let weights_slice = &l1_weights[start..end];
-            let bias = l1_weights[end];
-            let sum = dispatch_dot(input, weights_slice) + bias;
-            l1_outputs[i] = utils::apply_activation(sum, activation);
-        }
+        l1_weights
+            .chunks_exact(INPUT_SIZE + 1)
+            .zip(l1_outputs.iter_mut())
+            .for_each(|(neuron_weights, out)| {
+                let (weights, bias_slice) = neuron_weights.split_at(INPUT_SIZE);
+                let bias = bias_slice[0];
+                let sum = dispatch_dot(input, weights) + bias;
+                *out = utils::apply_activation(sum, activation);
+            });
 
         // Layer 2: Hidden 1 -> Hidden 2
-        for i in 0..HIDDEN2_SIZE {
-            let start = i * (HIDDEN1_SIZE + 1);
-            let end = start + HIDDEN1_SIZE;
-            let weights_slice = &l2_weights[start..end];
-            let bias = l2_weights[end];
-            let sum = dispatch_dot(&l1_outputs, weights_slice) + bias;
-            l2_outputs[i] = utils::apply_activation(sum, activation);
-        }
+        l2_weights
+            .chunks_exact(HIDDEN1_SIZE + 1)
+            .zip(l2_outputs.iter_mut())
+            .for_each(|(neuron_weights, out)| {
+                let (weights, bias_slice) = neuron_weights.split_at(HIDDEN1_SIZE);
+                let bias = bias_slice[0];
+                let sum = dispatch_dot(&l1_outputs, weights) + bias;
+                *out = utils::apply_activation(sum, activation);
+            });
 
-        // Layer 3: Hidden 2 -> Output (No activation on the output layer)
-        for i in 0..OUTPUT_SIZE {
-            let start = i * (HIDDEN2_SIZE + 1);
-            let end = start + HIDDEN2_SIZE;
-            let weights_slice = &l3_weights[start..end];
-            let bias = l3_weights[end];
-            output[i] = dispatch_dot(&l2_outputs, weights_slice) + bias;
-        }
+        // Layer 3: Hidden 2 -> Output
+        l3_weights
+            .chunks_exact(HIDDEN2_SIZE + 1)
+            .zip(output.iter_mut())
+            .for_each(|(neuron_weights, out)| {
+                let (weights, bias_slice) = neuron_weights.split_at(HIDDEN2_SIZE);
+                let bias = bias_slice[0];
+                *out = dispatch_dot(&l2_outputs, weights) + bias;
+            });
 
         output
     }

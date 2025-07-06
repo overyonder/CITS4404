@@ -148,10 +148,21 @@ impl GpuContext {
 /// much computation as possible, and then read the final result back. This engine follows that
 /// principle for the forward pass, while the CPU cache provides an escape hatch for the granular
 /// manipulations required by the genetic algorithm.
+/// # Optimization: Buffer Pre-Allocation
+/// To maximize performance, each `GpuIndividual` pre-allocates all necessary GPU buffers
+/// (`weights`, `input`, `output`, `config`, `staging`) and the `bind_group` upon creation.
+/// The `forward_propagate` method then reuses these buffers, only writing new data to the
+/// input and config buffers via `queue.write_buffer`. This avoids the significant overhead
+/// of creating and destroying buffers on every forward pass.
 pub struct GpuIndividual<'a> {
-    weights_buffer: Arc<wgpu::Buffer>,
     context: &'a GpuContext,
     weights: Vec<f32>, // CPU-side cache of weights
+    weights_buffer: Arc<wgpu::Buffer>,
+    input_buffer: wgpu::Buffer,
+    output_buffer: wgpu::Buffer,
+    config_buffer: wgpu::Buffer,
+    staging_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
 }
 
 impl Clone for GpuIndividual<'_> {
@@ -164,91 +175,55 @@ impl Clone for GpuIndividual<'_> {
 
 impl Individual for GpuIndividual<'_> {
     /// Performs a forward pass on the GPU using a compute shader.
+    /// This implementation reuses pre-allocated buffers for maximum performance.
     fn forward_propagate(
         &self,
         input: &[f32; INPUT_SIZE],
         activation: Activation,
     ) -> [f32; OUTPUT_SIZE] {
-        let device = &self.context.device;
         let queue = &self.context.queue;
 
-        // Create buffers for input, output, and config
-        let input_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Input Buffer"),
-            contents: bytemuck::cast_slice(input),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        let output_buffer_size = (OUTPUT_SIZE * std::mem::size_of::<f32>()) as u64;
-        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output Buffer"),
-            size: output_buffer_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
+        // Update input and config buffers with new data for this pass.
         let config_data = GpuConfig {
             activation_type: match activation {
                 Activation::Tanh => 0,
                 Activation::Relu => 1,
                 Activation::Atan => 2,
                 Activation::Linear => 3,
+                Activation::Sigmoid => 4,
             },
         };
-        let config_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Config Buffer"),
-            contents: bytemuck::bytes_of(&config_data),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        queue.write_buffer(&self.input_buffer, 0, bytemuck::cast_slice(input));
+        queue.write_buffer(&self.config_buffer, 0, bytemuck::bytes_of(&config_data));
 
-        // Create a bind group to link buffers to shader bindings
-        let bind_group_layout = self.context.pipeline.get_bind_group_layout(0);
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.weights_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: output_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: config_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        // Dispatch the compute shader.
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&self.context.pipeline);
+            cpass.set_bind_group(0, &self.bind_group, &[]);
+            cpass.dispatch_workgroups(1, 1, 1);
+        } // cpass is dropped, releasing the borrow on encoder
 
-        // Dispatch the compute shader
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
-        });
-        cpass.set_pipeline(&self.context.pipeline);
-        cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups(1, 1, 1);
-        drop(cpass);
-
-        // Create a staging buffer to read the output back to the CPU
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Buffer"),
-            size: output_buffer_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging_buffer, 0, output_buffer_size);
+        // Copy the result from the output buffer to the staging buffer.
+        encoder.copy_buffer_to_buffer(
+            &self.output_buffer,
+            0,
+            &self.staging_buffer,
+            0,
+            self.output_buffer.size(),
+        );
         queue.submit(Some(encoder.finish()));
 
-        // Read the result from the staging buffer
+        // Read the result from the staging buffer back to the CPU.
         let mut output = [0.0; OUTPUT_SIZE];
-        read_buffer_sync(&staging_buffer, |buffer_slice| {
+        read_buffer_sync(&self.staging_buffer, |buffer_slice| {
             let floats: &[f32] = bytemuck::cast_slice(buffer_slice);
             output.copy_from_slice(&floats[..OUTPUT_SIZE]);
         });
@@ -290,8 +265,6 @@ impl Individual for GpuIndividual<'_> {
             }
         }
         // After mutating the CPU-side cache, update the GPU buffer.
-        // A clone is created here to work around a borrow checker limitation,
-        // avoiding a simultaneous mutable and immutable borrow of `self`.
         self.set_weights_on_gpu(&self.weights.clone());
     }
 
@@ -327,8 +300,8 @@ impl Individual for GpuIndividual<'_> {
     /// # Teaching Note
     /// This function demonstrates how to load data for a GPU-based resource. The raw bytes are
     /// first loaded into a standard `Vec<f32>` on the CPU. Then, the `from_weights` constructor
-    // is called, which encapsulates the logic of creating a new GPU buffer and queueing a
-    // command to copy the host-side data to the device.
+    /// is called, which encapsulates the logic of creating a new GPU buffer and queueing a
+    /// command to copy the host-side data to the device.
     fn load(path: &str) -> Result<(Self, Config), Box<dyn std::error::Error>>
     where
         Self: Sized,
@@ -389,32 +362,94 @@ impl Default for GpuIndividual<'_> {
 
 impl<'a> GpuIndividual<'a> {
     /// Creates a new `GpuIndividual` from a slice of weights.
-    /// This involves creating a GPU buffer and copying the weights to it,
+    /// This involves creating all necessary GPU buffers and copying the weights to the device,
     /// as well as cloning the weights for the CPU-side cache.
     fn from_weights(weights: &[f32]) -> Self {
         let context = &*GPU_CONTEXT;
-        let weights_buffer = context
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Weights Buffer"),
-                contents: bytemuck::cast_slice(weights),
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::COPY_SRC,
-            });
+        let device = &context.device;
+
+        // Create all necessary buffers once.
+        let weights_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Weights Buffer"),
+            contents: bytemuck::cast_slice(weights),
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+        });
+
+        let input_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Input Buffer"),
+            size: (INPUT_SIZE * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let output_buffer_size = (OUTPUT_SIZE * std::mem::size_of::<f32>()) as u64;
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Output Buffer"),
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let config_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Config Buffer"),
+            size: std::mem::size_of::<GpuConfig>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer"),
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create the bind group once.
+        let bind_group_layout = context.pipeline.get_bind_group_layout(0);
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: weights_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
         Self {
-            weights_buffer: Arc::new(weights_buffer),
             context,
             weights: weights.to_vec(),
+            weights_buffer: Arc::new(weights_buffer),
+            input_buffer,
+            output_buffer,
+            config_buffer,
+            staging_buffer,
+            bind_group,
         }
     }
 
-    /// Writes the provided weight slice to the GPU buffer.
+    /// Writes the provided weight slice to the GPU buffer and updates the CPU cache.
     fn set_weights_on_gpu(&mut self, weights: &[f32]) {
         self.context
             .queue
             .write_buffer(&self.weights_buffer, 0, bytemuck::cast_slice(weights));
+        // Also update the CPU-side cache to ensure consistency.
+        self.weights.copy_from_slice(weights);
     }
 
     /// Reads the weights from the GPU buffer back to the CPU.

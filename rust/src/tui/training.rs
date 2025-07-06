@@ -1,5 +1,6 @@
 //! Training state, message passing, and backend logic for evolutionary training in the TUI.
 use crate::config::Config;
+use std::time::Instant;
 
 /// Holds the state for the training view.
 #[allow(dead_code)] // Struct is used, but some fields are not yet displayed in the UI.
@@ -20,6 +21,7 @@ pub enum MatchupState {
 
 pub struct TrainingState {
     pub running: bool,
+    pub start_time: Instant,
     pub current_generation: usize,
     pub total_generations: usize,
     pub best_fitness: f32,
@@ -39,6 +41,7 @@ impl TrainingState {
         };
         Self {
             running: true,
+            start_time: Instant::now(),
             current_generation: 0,
             total_generations: config.generations as usize,
             best_fitness: 0.0,

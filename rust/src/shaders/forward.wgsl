@@ -8,7 +8,7 @@
 
 // Uniforms for configuration
 struct Config {
-    // 0: Tanh, 1: ReLU, 2: Atan, 3: Linear
+    // 0: Tanh, 1: ReLU, 2: Atan, 3: Linear, 4: Sigmoid
     activation_type: u32,
 };
 @group(0) @binding(3) var<uniform> config: Config;
@@ -43,6 +43,10 @@ fn apply_activation(val: f32) -> f32 {
         // Linear
         case 3u: {
             return val;
+        }
+        // Sigmoid
+        case 4u: {
+            return 1.0 / (1.0 + exp(-val));
         }
         // Default to linear
         default: {

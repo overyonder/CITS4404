@@ -8,12 +8,11 @@ use crate::{
         training::{MatchupState, TrainingMessage},
     },
 };
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{backend::CrosstermBackend, layout::Alignment, widgets::Paragraph, Frame, Terminal};
 use std::{
     fs,
     io::{Result, Stdout},
-    time::Duration,
 };
 
 // This module is declared in `tui/mod.rs`, so it's available to its sibling `ui.rs`.
@@ -94,16 +93,14 @@ fn handle_events(app: &mut App) -> Result<()> {
     }
 
     // Handle user input with a timeout to allow for smooth animation.
-    if event::poll(Duration::from_millis(33))? {
-        // ~30 FPS
+    if crossterm::event::poll(std::time::Duration::from_millis(100))? {
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
-                // If the error popup is visible, it should consume all input.
+                // If an error message is visible, the first key press clears it
+                // and does nothing else. This makes the error popup modal.
                 if app.error_message.is_some() {
-                    if key.code == KeyCode::Enter || key.code == KeyCode::Esc {
-                        app.error_message = None;
-                    }
-                    return Ok(());
+                    app.error_message = None;
+                    return Ok(()); // Consume the key press and do nothing else.
                 }
 
                 match app.state {

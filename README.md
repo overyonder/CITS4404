@@ -6,12 +6,12 @@ This project provides Rust and C++ implementations of a neural network-driven Po
 
 - **Dual Implementations:** Full-featured Rust application and a legacy C++ version for comparison.
 - **CLI & TUI Modes (Rust):** Run training sessions from the command line or use the interactive Terminal UI.
-- **Multiple Compute Engines (Rust):** Choose from five different neural network engines, each with unique performance and memory trade-offs:
-  - `Stack`: Fixed-size, stack-allocated arrays.
-  - `Heap`: Dynamically-sized, heap-allocated vectors.
-  - `SIMD`: Accelerated with architecture-specific SIMD intrinsics.
-  - `Concurrent`: Parallelized with Rayon for multi-core evaluation.
-  - `GPU`: Massively parallel computation using `wgpu` and WGSL shaders.
+- **Multiple Compute Engines (Rust):** Choose from different neural network engines, each with unique performance and memory trade-offs:
+  - **`Stack`**: Fixed-size, stack-allocated arrays for maximum performance with zero allocations.
+  - **`Heap`**: Dynamically-sized, heap-allocated vectors for greater flexibility.
+  - **`SIMD`**: Accelerated with architecture-specific intrinsics (AVX2/FMA) for faster math.
+  - **`GPU`**: Massively parallel computation using `wgpu` and custom WGSL shaders.
+- **Concurrent Mode:** Host-level concurrency (`stack`, `heap`, `simd`) can be enabled with the `--concurrent` flag to leverage multiple CPU cores.
 - **Genetic Algorithm:** Evolves neural network weights to control Pong paddles, optimizing for skillful play.
 - **Comprehensive Benchmarking:** A robust `benchmark.sh` script using `hyperfine` to compare all Rust engines and the C++ version.
 - **Extensive Documentation:** In-code `rustdoc` comments explain algorithms, data structures, and design patterns.
@@ -71,7 +71,8 @@ The `benchmark.sh` script provides a standardized way to compare the performance
 The script will:
 1.  Build the Rust project in release mode.
 2.  Build the C++ project using its `Makefile`.
-3.  Run `hyperfine` on all five Rust engines and the C++ implementation.
+3.  Run `hyperfine` on all Rust engines in both single-threaded and concurrent modes.
+4.  Run `hyperfine` on the C++ implementation for comparison.
 
 ## 🧠 Evolutionary Algorithm
 
@@ -81,7 +82,7 @@ The core of this project is a genetic algorithm that trains a population of neur
     -   **Inputs (8):** Ball and paddle positions/velocities, all normalized.
     -   **Hidden Layers (16, 4):** Two hidden layers with a configurable activation function.
     -   **Output (1):** A single value determining the paddle's upward or downward movement.
--   **Fitness Function:** Fitness is measured by the number of times a paddle successfully returns the ball during a game.
+-   **Fitness Function:** Fitness can be measured in several ways, configurable via the `--fitness-func` flag. The default (`CppEquivalent`) measures successful ball returns, while others (`Balanced`, `Performance`) incorporate rally length and game duration to reward more complex behaviors.
 -   **Evolution Process:**
     1.  **Selection:** The best-performing individuals (elites) are preserved.
     2.  **Crossover:** New individuals are created by combining the weights of two elite parents.
@@ -91,8 +92,9 @@ The core of this project is a genetic algorithm that trains a population of neur
 
 You can configure the training process via CLI flags or the TUI:
 
--   `--engine`: The Rust engine to use (`stack`, `heap`, `simd`, `concurrent`, `gpu`).
--   `--activation`: The activation function for hidden layers (`tanh`, `relu`, `atan`, `linear`).
+-   `--engine`: The Rust engine to use (`stack`, `heap`, `simd`, `gpu`).
+-   `--concurrent`: Use host-level concurrency (Rayon) for evaluation. Works with `stack`, `heap`, and `simd` engines.
+-   `--activation`: The activation function for hidden layers (`tanh`, `relu`, `atan`, `linear`, `sigmoid`).
 -   `--generations`: The number of generations to run.
 -   `--population-size`: The number of individuals in each generation.
 -   `--mutation-rate`: The probability (0.0 to 1.0) that a weight will be mutated.

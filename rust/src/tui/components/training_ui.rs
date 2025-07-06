@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{BarChart, Block, BorderType, Borders, Gauge, Paragraph, Tabs},
+    widgets::{Block, BorderType, Borders, Gauge, Paragraph, Sparkline, Tabs},
     Frame,
 };
 
@@ -95,7 +95,7 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
         let progress_chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
-            .constraints(&[Constraint::Length(1), Constraint::Min(1)])
+            .constraints(&[Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
             .split(progress_area);
 
         // Progress Gauge
@@ -118,20 +118,22 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
         let text_paragraph = Paragraph::new(generations_text).alignment(Alignment::Center);
         f.render_widget(text_paragraph, progress_chunks[1]);
 
-        // Fitness History Bar Chart
-        let fitness_tuples: Vec<(String, u64)> = training_state
-            .fitness_history
-            .iter()
-            .enumerate()
-            .map(|(i, &f)| (i.to_string(), f as u64))
-            .collect();
+        // Stopwatch
+        let elapsed = training_state.start_time.elapsed();
+        let elapsed_secs = elapsed.as_secs();
+        let stopwatch_text = format!(
+            "Time: {:02}:{:02}",
+            elapsed_secs / 60,
+            elapsed_secs % 60
+        );
+        let stopwatch_paragraph = Paragraph::new(stopwatch_text).alignment(Alignment::Center);
+        f.render_widget(stopwatch_paragraph, progress_chunks[2]);
 
-        let fitness_data: Vec<(&str, u64)> = fitness_tuples
-            .iter()
-            .map(|(s, v)| (s.as_str(), *v))
-            .collect();
+        // Fitness History Sparkline
+        let fitness_data: Vec<u64> =
+            training_state.fitness_history.iter().map(|&f| f as u64).collect();
 
-        let barchart = BarChart::default()
+        let sparkline = Sparkline::default()
             .block(
                 Block::default()
                     .title("Fitness History")
@@ -139,10 +141,8 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
                     .border_type(BorderType::Rounded),
             )
             .data(&fitness_data)
-            .bar_width(1)
-            .bar_style(Style::default().fg(Color::Yellow))
-            .value_style(Style::default().fg(Color::Black).bg(Color::Yellow));
-        f.render_widget(barchart, sidebar_chunks[1]);
+            .style(Style::default().fg(Color::Yellow));
+        f.render_widget(sparkline, sidebar_chunks[1]);
 
         // Champion Genome Visualization
         let (cols, rows) = (31, 7); // 31x7 grid for 217 weights
@@ -189,43 +189,7 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(champion_canvas, sidebar_chunks[2]);
 
         // Info Panel
-        let engine_style = match app.config.engine {
-            // stack = grey, SIMD = orange, concurrent = teal, GPU = purple
-            crate::config::Engine::Stack => Style::default().bg(Color::Gray).fg(Color::Black),
-            crate::config::Engine::Heap => Style::default().bg(Color::Red).fg(Color::White),
-            crate::config::Engine::Simd => Style::default().bg(Color::Rgb(255, 165, 0)).fg(Color::Black),
-            crate::config::Engine::Gpu => Style::default().bg(Color::Magenta).fg(Color::White),
-        };
-
-        let concurrent_style = if app.config.concurrent {
-            Style::default().bg(Color::Rgb(0, 128, 128)).fg(Color::White) // Teal
-        } else {
-            Style::default().bg(Color::DarkGray).fg(Color::White)
-        };
-
-        let info_spans = vec![
-            Span::raw("  "),
-            Span::styled(format!(" {} ", app.config.engine), engine_style),
-            Span::raw(" "),
-            Span::styled(
-                if app.config.concurrent {
-                    " Concurrent "
-                } else {
-                    " Sequential "
-                },
-                concurrent_style,
-            ),
-            Span::raw(format!("\n  Fitness:  {} | Activation: {}\n", app.config.fitness_func, app.config.activation)),
-            Span::raw(format!("  Pop: {} | Mut Rate: {} | Mut Str: {}", app.config.population_size, app.config.mutation_rate, app.config.mutation_strength)),
-        ];
-
-        let info_text = Paragraph::new(Line::from(info_spans)).block(
-            Block::default()
-                .title("Info")
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded),
-        );
-        f.render_widget(info_text, sidebar_chunks[3]);
+        draw_info_panel(f, app, sidebar_chunks[3]);
 
         // Log Panel
         let log_widget: TuiLoggerWidget = TuiLoggerWidget::default()
@@ -344,6 +308,78 @@ fn draw_matchups_view(f: &mut Frame, training_state: &TrainingState, area: Rect)
     });
 
     f.render_widget(canvas, inner_area);
+}
+
+/// Draws the info panel with colorful badges for configuration parameters.
+fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .title("Info")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let (engine_str, is_concurrent) = {
+        let engine_name = app.config.engine.to_string();
+        if let Some(stripped) = engine_name.strip_prefix("concurrent-") {
+            (stripped.to_string(), true)
+        } else {
+            (engine_name, false)
+        }
+    };
+
+    let engine_color = match engine_str.as_str() {
+        "stack" => Color::Gray,
+        "heap" => Color::Red,
+        "simd" => Color::Blue,
+        "gpu" => Color::Magenta,
+        _ => Color::White,
+    };
+
+    let activation_color = match app.config.activation {
+        crate::config::Activation::Tanh => Color::Cyan,
+        crate::config::Activation::Relu => Color::Green,
+        crate::config::Activation::Atan => Color::Yellow,
+        crate::config::Activation::Linear => Color::White,
+        crate::config::Activation::Sigmoid => Color::Rgb(255, 165, 0), // Orange
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::raw("Engine: "),
+            Span::styled(
+                format!(" {} ", engine_str.to_uppercase()),
+                Style::default().bg(engine_color).fg(Color::Black),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("Activation: "),
+            Span::styled(
+                format!(" {} ", app.config.activation.to_string().to_uppercase()),
+                Style::default().bg(activation_color).fg(Color::Black),
+            ),
+        ]),
+        Line::from(format!("Fitness Fn: {}", app.config.fitness_func)),
+        Line::from(format!("Population: {}", app.config.population_size)),
+        Line::from(format!("Mutation Rate: {}", app.config.mutation_rate)),
+        Line::from(format!("Mutation Strength: {}", app.config.mutation_strength)),
+    ];
+
+    if is_concurrent {
+        lines.insert(
+            1,
+            Line::from(vec![
+                Span::raw("Mode: "),
+                Span::styled(
+                    " CONCURRENT ",
+                    Style::default().bg(Color::LightBlue).fg(Color::Black),
+                ),
+            ]),
+        );
+    }
+
+    let info_paragraph = Paragraph::new(lines).alignment(Alignment::Left);
+    f.render_widget(info_paragraph, inner_area);
 }
 
 fn calculate_grid_size(num_items: usize, area_width: usize) -> (usize, usize) {

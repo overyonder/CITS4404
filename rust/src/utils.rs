@@ -15,6 +15,7 @@ pub fn apply_activation(x: f32, activation: Activation) -> f32 {
         Activation::Tanh => x.tanh(),
         Activation::Relu => x.max(0.0),
         Activation::Atan => x.atan(),
+        Activation::Sigmoid => 1.0 / (1.0 + (-x).exp()),
         Activation::Linear => x,
     }
 }
