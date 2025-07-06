@@ -84,8 +84,11 @@ struct Args {
 fn main() -> io::Result<()> {
     // Initialize the logging subscriber.
     // You can override the log level by setting the RUST_LOG environment variable.
-    // For example: `RUST_LOG=debug` or `RUST_LOG=rust=trace`
+    // For example: `RUST_LOG=debug` or `RUST_LOG=trace`
     tracing_subscriber::fmt()
+        .compact()
+        .with_target(false)
+        .with_timer(tracing_subscriber::fmt::time::uptime())
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
         .init();
 
