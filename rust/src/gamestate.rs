@@ -20,15 +20,10 @@ use rand::Rng;
 /// from a common starting state.
 ///
 /// # Neural Network Input
-/// The game state is converted into an 8-element array for the neural network:
-/// 1.  Ball X position (normalized)
-/// 2.  Ball Y position (normalized)
-/// 3.  Ball X velocity (normalized)
-/// 4.  Ball Y velocity (normalized)
-/// 5.  Own paddle Y position (normalized)
-/// 6.  Own paddle Y velocity (normalized)
-/// 7.  Opponent paddle Y position (normalized)
-/// 8.  Opponent paddle Y velocity (normalized)
+/// The game state is converted into an 8-element array before being fed to the
+/// neural network. See the documentation for `constants::INPUT_SIZE` for a detailed
+/// breakdown of these inputs. All inputs are normalized to a consistent range
+/// (e.g., `[-1, 1]`) to improve network training stability.
 ///
 /// # Teaching Note
 /// This struct is a prime example of a **state representation**. It captures the
@@ -88,8 +83,11 @@ impl GameState {
     ///
     /// # Teaching Note
     /// To allow a single neural network to control both paddles, we can reuse the same
-    /// network by simply flipping its perspective of the world. The ball's X position and
-    /// velocity are inverted. This is a common and powerful technique in symmetric games.
+    /// network by simply flipping its perspective of the world. This is a common and
+    /// powerful technique in symmetric games. The transformation is as follows:
+    /// - The ball's X position is inverted (`WIDTH - x`).
+    /// - The ball's X velocity is inverted (`-vx`).
+    /// - The roles of the paddles are swapped (paddle2 becomes 'own', paddle1 becomes 'opponent').
     pub fn get_inputs_for_player2(&self) -> [f32; 8] {
         [
             (WIDTH as f32 - self.ball_pos.0) / WIDTH as f32, // Flipped Ball X
@@ -114,7 +112,8 @@ impl GameState {
         self.ball_vel.0 = BALL_INITIAL_SPEED * angle.cos();
         self.ball_vel.1 = BALL_INITIAL_SPEED * angle.sin();
 
-        // If serving to the right player, the ball moves left (negative x velocity).
+        // If `serve_to_left_player` is false, we serve to the right player. To do this,
+        // we invert the ball's initial horizontal velocity to make it travel left.
         if !serve_to_left_player {
             self.ball_vel.0 *= -1.0;
         }
@@ -194,7 +193,9 @@ impl GameState {
             let paddle_bottom = paddle1_box.1 + PADDLE_HEIGHT as f32 / 2.0;
             if self.ball_pos.1 >= paddle_top && self.ball_pos.1 <= paddle_bottom {
                 self.ball_vel.0 = self.ball_vel.0.abs(); // Reflect ball horizontally
-                self.ball_vel.1 += self.paddle1_vel * 0.4; // Impart some paddle velocity
+                // Impart some of the paddle's velocity to the ball for more dynamic rallies.
+                // The 0.4 factor acts as a coefficient of energy transfer.
+                self.ball_vel.1 += self.paddle1_vel * 0.4;
                 self.returns.0 += 1;
             }
         // Right paddle collision
@@ -203,7 +204,7 @@ impl GameState {
             let paddle_bottom = paddle2_box.1 + PADDLE_HEIGHT as f32 / 2.0;
             if self.ball_pos.1 >= paddle_top && self.ball_pos.1 <= paddle_bottom {
                 self.ball_vel.0 = -self.ball_vel.0.abs(); // Reflect ball horizontally
-                self.ball_vel.1 += self.paddle2_vel * 0.4; // Impart some paddle velocity
+                self.ball_vel.1 += self.paddle2_vel * 0.4;
                 self.returns.1 += 1;
             }
         }
@@ -215,12 +216,16 @@ impl GameState {
             self.ball_vel.1 = (self.ball_vel.1 / speed) * BALL_MAX_SPEED;
         }
 
-        // Score detection (when ball goes past a paddle)
+        // Score detection. Note that we check if the *entire ball* has passed the screen edge.
+        // # Teaching Note
+        // A common mistake is to only check the ball's center (`ball_pos.0 < 0.0`).
+        // By checking `ball_pos.0 + BALL_RADIUS < 0.0`, we ensure the score only triggers
+        // after the entire ball is off-screen, which is physically accurate.
         if self.ball_pos.0 + BALL_RADIUS < 0.0 {
-            self.scores.1 += 1;
+            self.scores.1 += 1; // Player 2 (right) scores
             self.reset_ball(false); // Serve to player 1 (left)
         } else if self.ball_pos.0 - BALL_RADIUS > WIDTH as f32 {
-            self.scores.0 += 1;
+            self.scores.0 += 1; // Player 1 (left) scores
             self.reset_ball(true); // Serve to player 2 (right)
         }
     }
@@ -241,7 +246,12 @@ impl GameState {
         self.returns = (0, 0);
         self.reset_ball(rand::thread_rng().gen());
 
-        // Run for a maximum of 30 seconds worth of ticks.
+        // # Teaching Note
+        // The simulation runs for a maximum number of ticks (e.g., 30 seconds worth).
+        // This timeout is a crucial safeguard to prevent infinite loops. For example, if two
+        // individuals learn a passive strategy of just sitting in the middle of the screen
+        // without moving, a game could theoretically last forever. The timeout ensures that
+        // every simulation terminates.
         for _tick in 0..(TICK_RATE as u32 * 30) {
             if self.scores.0 >= MAX_SCORE || self.scores.1 >= MAX_SCORE {
                 break;
@@ -251,11 +261,11 @@ impl GameState {
 
         // Calculate fitness based on the selected function
         match config.fitness_func {
-            // The original C++ fitness function was simply the number of returns.
+            // Rewards survival (frames) and returns. Encourages defensive, long rallies.
             FitnessFunc::CppEquivalent => self.returns,
 
-            // A balanced approach that rewards returns, but also winning.
-            // A win is worth 5 returns.
+            // Rewards returns and winning the match. Encourages efficient, balanced play.
+            // A win is worth a bonus of 5 returns.
             FitnessFunc::Balanced => {
                 let mut left_score = self.returns.0;
                 let mut right_score = self.returns.1;
@@ -267,12 +277,12 @@ impl GameState {
                 (left_score, right_score)
             }
 
-            // A performance-focused function that heavily rewards winning.
+            // Heavily rewards winning the match. Encourages aggressive, decisive strategies.
             FitnessFunc::Performance => {
                 let mut left_score = self.returns.0;
                 let mut right_score = self.returns.1;
                 if self.scores.0 >= MAX_SCORE {
-                    left_score += 10;
+                    left_score += 10; // Bonus for a decisive win
                 }
                 if self.scores.1 >= MAX_SCORE {
                     right_score += 10;

@@ -2,6 +2,8 @@
 
 use crate::{config::Activation, constants::*, traits::Individual, utils};
 use rand::Rng;
+use std::io::Read;
+use bytemuck;
 
 // Use architecture-specific intrinsics for x86_64.
 #[cfg(target_arch = "x86_64")]
@@ -74,6 +76,13 @@ fn dot_simd(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Dispatches to the correct dot product implementation based on the target architecture.
+///
+/// # Teaching Note: Conditional Compilation
+/// This function is a key part of making the SIMD engine portable. It uses `#[cfg]`
+/// attributes to conditionally compile code. On `x86_64` targets, it calls the `unsafe`
+/// `dot_simd` function. On all other architectures, it calls the safe, scalar fallback
+/// implementation. This ensures the program compiles and runs everywhere, while only
+/// enabling the high-performance SIMD code where it's supported.
 #[inline]
 fn dispatch_dot(a: &[f32], b: &[f32]) -> f32 {
     // On x86_64, call the unsafe SIMD version. On other platforms, use the safe fallback.
@@ -139,12 +148,78 @@ impl Individual for SimdIndividual {
     fn weights_as_mut_slice(&mut self) -> &mut [f32] {
         &mut self.weights
     }
+
+    /// Loads a `SimdIndividual` and its configuration from a file.
+    ///
+    /// # File Format
+    /// The function expects the file to be in the format created by the `save` method:
+    /// 1. `u64` (little-endian): Length of the JSON config string.
+    /// 2. `[u8]`: The UTF-8 encoded JSON config string.
+    /// 3. `[f32]`: The raw `f32` weights, which are read directly into the stack-allocated array.
+    ///
+    /// # Returns
+    /// A `Result` containing a tuple of the loaded `SimdIndividual` and its `Config`,
+    /// or an error if reading or deserialization fails.
+    ///
+    /// # Teaching Note: Safe and Efficient Deserialization
+    /// This function demonstrates a safe and highly efficient way to deserialize raw bytes
+    /// back into structured data. Instead of reading floats one by one, it reads the entire
+    /// block of weight data and then uses `bytemuck::cast_slice`. This is a zero-copy cast
+    /// that reinterprets the byte slice as a float slice, which is safe because `f32` has
+    /// no internal padding and a standard memory layout. The final `copy_from_slice` then
+    /// efficiently moves the data into the new individual's stack-allocated array.
+    fn load(path: &str) -> Result<(Self, crate::config::Config), Box<dyn std::error::Error>>
+    where
+        Self: Sized,
+    {
+        let mut file = std::fs::File::open(path)?;
+
+        // 1. Read config length
+        let mut config_len_bytes = [0u8; 8];
+        file.read_exact(&mut config_len_bytes)?;
+        let config_len = u64::from_le_bytes(config_len_bytes);
+
+        // 2. Read and deserialize config
+        let mut config_bytes = vec![0u8; config_len as usize];
+        file.read_exact(&mut config_bytes)?;
+        let config: crate::config::Config = serde_json::from_slice(&config_bytes)?;
+
+        // 3. Read weights
+        let mut weights_bytes = Vec::new();
+        file.read_to_end(&mut weights_bytes)?;
+
+        if weights_bytes.len() != TOTAL_WEIGHTS * std::mem::size_of::<f32>() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Expected {} weight bytes, but found {}",
+                    TOTAL_WEIGHTS * std::mem::size_of::<f32>(),
+                    weights_bytes.len()
+                ),
+            )));
+        }
+
+        let weights_slice: &[f32] = bytemuck::cast_slice(&weights_bytes);
+
+        let mut individual = Self {
+            weights: [0.0; TOTAL_WEIGHTS],
+        };
+        individual.weights.copy_from_slice(weights_slice);
+
+        Ok((individual, config))
+    }
 }
 
 
 
 impl Default for SimdIndividual {
     /// Creates a `SimdIndividual` with weights initialized to random values in `[-1, 1]`.
+    ///
+    /// # Teaching Note
+    /// The `Default` trait is used by `Population::new` to create the initial population.
+    /// Initializing with random weights is crucial for a genetic algorithm to ensure that
+    /// the starting population has diversity, providing a wide base for evolution to begin.
+    /// If they were all initialized to zero, they would all behave identically.
     fn default() -> Self {
         let mut weights = [0.0; TOTAL_WEIGHTS];
         let mut rng = rand::thread_rng();

@@ -1,22 +1,37 @@
 use crate::{config::Activation, constants::*, traits::Individual, utils};
 use rand::Rng;
+use std::io::Read;
+use bytemuck;
 
-/// An individual represented by weights stored on the heap.
-#[derive(Clone)]
-/// A neural network individual whose weights are stored on the heap (Vec).
+/// A neural network individual whose weights are stored in a heap-allocated `Vec<f32>`.
 ///
 /// # Memory Layout
-/// - All weights are stored in a heap-allocated `Vec<f32>`.
-/// - Allows for flexible, dynamic allocation of weights.
+/// All weights (`TOTAL_WEIGHTS`) are stored in a `Vec<f32>`, which allocates its memory on the heap.
+///
+/// # Performance
+/// - **Pros**: Flexible. The size of the network is not limited by the stack and can be determined
+///   at runtime (though it's fixed by a constant in this project).
+/// - **Cons**: Slightly slower than `StackIndividual` due to the overhead of heap allocation
+///   and potential for worse cache locality if the memory is fragmented.
 ///
 /// # Teaching Note
-/// - Demonstrates heap allocation and dynamic memory management in Rust.
+/// This struct is a direct contrast to `StackIndividual`. It showcases the trade-offs between
+/// the stack and the heap. While the heap offers flexibility, it comes with a performance cost.
+/// For this project, where the network size is small and fixed, the stack is superior, but the
+/// heap would be necessary for larger, more complex models.
+#[derive(Clone)]
 pub struct HeapIndividual {
-    /// All weights for the network, stored on the heap.
+    /// All weights for the network, stored contiguously on the heap.
     pub weights: Vec<f32>,
 }
 
 impl Default for HeapIndividual {
+    /// Creates a `HeapIndividual` with weights initialized to random values in `[-1, 1]`.
+    ///
+    /// # Teaching Note
+    /// The `Default` trait is used by `Population::new` to create the initial population.
+    /// Initializing with random weights is crucial for a genetic algorithm to ensure that
+    /// the starting population has diversity, providing a wide base for evolution to begin.
     fn default() -> Self {
         let mut weights = vec![0.0; TOTAL_WEIGHTS];
         let mut rng = rand::thread_rng();
@@ -78,5 +93,60 @@ impl Individual for HeapIndividual {
 
     fn weights_as_mut_slice(&mut self) -> &mut [f32] {
         &mut self.weights
+    }
+
+    /// Loads a `HeapIndividual` and its configuration from a file.
+    ///
+    /// # File Format
+    /// The function expects the file to be in the format created by the `save` method:
+    /// 1. `u64` (little-endian): Length of the JSON config string.
+    /// 2. `[u8]`: The UTF-8 encoded JSON config string.
+    /// 3. `[f32]`: The raw `f32` weights, which are read into a new heap-allocated `Vec<f32>`.
+    ///
+    /// # Returns
+    /// A `Result` containing a tuple of the loaded `HeapIndividual` and its `Config`,
+    /// or an error if reading or deserialization fails.
+    ///
+    /// # Teaching Note: Deserialization to the Heap
+    /// The process is similar to the `StackIndividual`, but with a key difference. After
+    /// `bytemuck::cast_slice` provides a temporary, zero-copy view of the bytes as `&[f32]`,
+    /// `.to_vec()` is called. This performs a new heap allocation and copies the weight
+    /// data into it, creating the `Vec<f32>` that the `HeapIndividual` owns.
+    fn load(path: &str) -> Result<(Self, crate::config::Config), Box<dyn std::error::Error>>
+    where
+        Self: Sized,
+    {
+        let mut file = std::fs::File::open(path)?;
+
+        // 1. Read config length
+        let mut config_len_bytes = [0u8; 8];
+        file.read_exact(&mut config_len_bytes)?;
+        let config_len = u64::from_le_bytes(config_len_bytes);
+
+        // 2. Read and deserialize config
+        let mut config_bytes = vec![0u8; config_len as usize];
+        file.read_exact(&mut config_bytes)?;
+        let config: crate::config::Config = serde_json::from_slice(&config_bytes)?;
+
+        // 3. Read weights
+        let mut weights_bytes = Vec::new();
+        file.read_to_end(&mut weights_bytes)?;
+
+        if weights_bytes.len() != TOTAL_WEIGHTS * std::mem::size_of::<f32>() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Expected {} weight bytes, but found {}",
+                    TOTAL_WEIGHTS * std::mem::size_of::<f32>(),
+                    weights_bytes.len()
+                ),
+            )));
+        }
+
+        let weights: Vec<f32> = bytemuck::cast_slice(&weights_bytes).to_vec();
+
+        let individual = Self { weights };
+
+        Ok((individual, config))
     }
 }

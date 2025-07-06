@@ -8,11 +8,7 @@ use once_cell::sync::Lazy;
 use pollster::block_on;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
-use std::{
-    fs,
-    io::{self, Write},
-    sync::Arc,
-};
+use std::{fs, io::Read, sync::Arc};
 use wgpu::util::DeviceExt;
 
 // A global, lazily-initialized GPU context, shared across all GpuIndividuals.
@@ -20,9 +16,12 @@ static GPU_CONTEXT: Lazy<GpuContext> = Lazy::new(GpuContext::new);
 
 /// Holds the WGPU device, queue, and the pre-compiled compute pipeline.
 ///
-/// # Teaching Note
-/// This struct encapsulates the boilerplate `wgpu` setup. By creating it once with `Lazy`,
-/// we avoid the high cost of initializing the GPU for every single `GpuIndividual`.
+/// # Teaching Note: Global GPU Context
+/// This struct encapsulates the boilerplate `wgpu` setup. Initializing a GPU device and
+/// compiling shader pipelines are expensive operations. By creating a single, global context
+/// using `once_cell::sync::Lazy`, we ensure this setup cost is paid only once when the first
+/// `GpuIndividual` is created. All subsequent individuals will share this context, making their
+/// creation nearly instantaneous.
 struct GpuContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -124,16 +123,26 @@ impl GpuContext {
 
 /// An individual whose neural network weights are stored and processed on the GPU.
 ///
-/// # Memory and Performance
-/// - Weights are held in a `wgpu::Buffer` on the GPU for fast access by compute shaders.
-/// - A `Vec<f32>` of the weights is also kept on the CPU side to avoid expensive GPU-CPU
-///   data transfers for operations like `crossover` and `mutate`, and to provide
-///   synchronous access for `weights_as_slice`.
-/// - The `forward_propagate` method is extremely fast as it dispatches a shader.
-/// - Genetic operations (`crossover`, `mutate`) are still a performance bottleneck compared
-///   to a full GPU implementation, but are faster than they would be if they had to read
-///   from the GPU every time. This is a candidate for a future optimization using a
-///   dedicated compute shader.
+/// # Memory and Performance: A Hybrid Approach
+/// This engine uses a hybrid memory model to balance performance and implementation simplicity.
+///
+/// - **GPU-Side Storage**: The full weight set is stored in a `wgpu::Buffer` on the GPU.
+///   This allows the `forward_propagate` method to be extremely fast, as the compute shader
+///   can access the weights directly without any data transfer.
+///
+/// - **CPU-Side Cache**: A `Vec<f32>` of the weights is also kept on the CPU. This is critical
+///   for the genetic algorithm. Operations like `crossover` and `mutate` need to read and
+///   write individual weights. Reading from the GPU is a slow, synchronous operation that
+///   would create a major bottleneck. By operating on the CPU cache, these methods are fast.
+///   The `mutate` method then efficiently writes the updated weights back to the GPU in a
+///   single bulk transfer.
+///
+/// # Teaching Note
+/// This design highlights a common pattern in GPGPU programming: minimize data transfer between
+/// the host (CPU) and the device (GPU). The ideal is to send data to the GPU once, perform as
+/// much computation as possible, and then read the final result back. This engine follows that
+/// principle for the forward pass, while the CPU cache provides an escape hatch for the granular
+/// manipulations required by the genetic algorithm.
 pub struct GpuIndividual<'a> {
     weights_buffer: Arc<wgpu::Buffer>,
     context: &'a GpuContext,
@@ -246,9 +255,10 @@ impl Individual for GpuIndividual<'_> {
         output
     }
 
-    /// # Performance Note
-    /// Crossover is performed on the CPU using the cached `weights` vector to avoid
-    /// GPU-CPU synchronization. A new child individual is created from the resulting weights.
+    /// # Teaching Note: CPU-Side Crossover
+    /// Crossover is performed entirely on the CPU using the cached `weights` vector. This avoids
+    /// a slow round-trip to the GPU. A new child individual is created from the resulting
+    /// weight vector, which in turn creates a new buffer on the GPU and copies the data over.
     fn crossover<R: Rng>(&self, other: &Self, rng: &mut R) -> Self {
         let p1_weights = &self.weights;
         let p2_weights = &other.weights;
@@ -265,9 +275,11 @@ impl Individual for GpuIndividual<'_> {
         GpuIndividual::from_weights(&child_weights)
     }
 
-    /// # Performance Note
-    /// Mutation is performed on the CPU-cached `weights` vector. After mutation, the
-    /// updated weights are written back to the GPU buffer.
+    /// # Teaching Note: CPU-Side Mutation and GPU Synchronization
+    /// Like crossover, mutation is performed on the fast, CPU-cached `weights` vector. After
+    /// the weights are modified, `set_weights_on_gpu` is called to perform an efficient
+    /// bulk transfer of the updated data to the corresponding GPU buffer, ensuring the two
+    /// copies remain synchronized.
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
         let normal = Normal::new(0.0, config.mutation_strength).unwrap();
 
@@ -287,22 +299,83 @@ impl Individual for GpuIndividual<'_> {
     }
 
     fn weights_as_mut_slice(&mut self) -> &mut [f32] {
-        // Note: If this slice is mutated, the caller is responsible for calling
-        // `set_weights_on_gpu` to maintain consistency.
-        // However, in the current implementation, `mutate` is the primary way
-        // weights are changed, and it handles this synchronization itself.
+        // Note: If this slice is mutated, the caller is responsible for calling `set_weights_on_gpu`
+        // to maintain consistency between the CPU cache and the GPU buffer. The `Individual`
+        // trait's default `mutate` implementation does not do this, which is why `GpuIndividual`
+        // provides its own `mutate` implementation that correctly handles synchronization.
         &mut self.weights
     }
 
-    fn save(&self, path: &str) -> io::Result<()> {
-        let mut file = fs::File::create(path)?;
-        // Use the CPU-side cache for saving, as it's guaranteed to be in sync.
-        let weights_bytes: &[u8] = bytemuck::cast_slice(&self.weights);
-        file.write_all(weights_bytes)
+    /// Loads a `GpuIndividual` and its configuration from a file.
+    ///
+    /// # File Format
+    /// The function expects the file to be in the format created by the `save` method:
+    /// 1. `u64` (little-endian): Length of the JSON config string.
+    /// 2. `[u8]`: The UTF-8 encoded JSON config string.
+    /// 3. `[f32]`: The raw `f32` weights.
+    ///
+    /// # Implementation
+    /// The weights are first loaded into a heap-allocated `Vec<f32>` on the CPU.
+    /// Then, the `from_weights` constructor is used to create the `GpuIndividual`,
+    /// which handles creating a `wgpu::Buffer` and copying the weights to the GPU.
+    ///
+    /// # Returns
+    /// A `Result` containing a tuple of the loaded `GpuIndividual` and its `Config`,
+    /// or an error if reading or deserialization fails.
+    ///
+    /// # Teaching Note
+    /// This function demonstrates how to load data for a GPU-based resource. The raw bytes are
+    /// first loaded into a standard `Vec<f32>` on the CPU. Then, the `from_weights` constructor
+    // is called, which encapsulates the logic of creating a new GPU buffer and queueing a
+    // command to copy the host-side data to the device.
+    fn load(path: &str) -> Result<(Self, Config), Box<dyn std::error::Error>>
+    where
+        Self: Sized,
+    {
+        let mut file = fs::File::open(path)?;
+
+        // 1. Read config length
+        let mut config_len_bytes = [0u8; 8];
+        file.read_exact(&mut config_len_bytes)?;
+        let config_len = u64::from_le_bytes(config_len_bytes);
+
+        // 2. Read and deserialize config
+        let mut config_bytes = vec![0u8; config_len as usize];
+        file.read_exact(&mut config_bytes)?;
+        let config: Config = serde_json::from_slice(&config_bytes)?;
+
+        // 3. Read weights
+        let mut weights_bytes = Vec::new();
+        file.read_to_end(&mut weights_bytes)?;
+
+        if weights_bytes.len() != TOTAL_WEIGHTS * std::mem::size_of::<f32>() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "Expected {} weight bytes, but found {}",
+                    TOTAL_WEIGHTS * std::mem::size_of::<f32>(),
+                    weights_bytes.len()
+                ),
+            )));
+        }
+
+        let weights: Vec<f32> = bytemuck::cast_slice(&weights_bytes).to_vec();
+
+        // Use the from_weights constructor to correctly initialize the GPU buffer
+        let individual = GpuIndividual::from_weights(&weights);
+
+        Ok((individual, config))
     }
 }
 
 impl Default for GpuIndividual<'_> {
+    /// Creates a `GpuIndividual` with random weights, initializing them on both the CPU and GPU.
+    ///
+    /// # Teaching Note
+    /// The `Default` trait is used by `Population::new` to create the initial population.
+    /// This implementation first creates a random set of weights on the CPU (heap), and then
+    /// uses `from_weights` to create the individual, which also copies the initial weights
+    /// to a new buffer on the GPU.
     fn default() -> Self {
         let mut weights = vec![0.0; TOTAL_WEIGHTS];
         let mut rng = rand::thread_rng();
@@ -344,7 +417,13 @@ impl<'a> GpuIndividual<'a> {
     }
 
     /// Reads the weights from the GPU buffer back to the CPU.
-    /// Note: This is a synchronous and potentially slow operation.
+    ///
+    /// # Teaching Note
+    /// This function demonstrates how to read data back from the GPU. It involves creating a
+    /// special "staging" buffer that is accessible by both the CPU and GPU. A command is
+/// encoded to copy from the main weights buffer to the staging buffer. The CPU then has
+    /// to wait for the GPU to finish this operation before it can map the staging buffer's
+    /// memory and read the data. This is a synchronous and potentially slow operation.
     #[allow(dead_code)]
     fn get_weights_from_gpu(&self) -> Vec<f32> {
         let staging_buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {

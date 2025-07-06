@@ -79,16 +79,34 @@ pub const MAX_PADDLE_POS: f32 = HEIGHT as f32 - PADDLE_HEIGHT as f32 / 2.0;
 // ----------------------------------------------------------------------------
 
 /// The structure of the neural network, defined as an array of layer sizes.
-/// The format is [Input, Hidden1, Hidden2, ..., Output].
+/// The format is `[Input, Hidden1, Hidden2, ..., Output]`.
+///
+/// # Teaching Note
+/// Hardcoding the architecture in `const` values is simple and efficient for a fixed
+/// problem like this. A more advanced or flexible library might define the network
+/// structure at runtime, for example by reading it from a configuration file. This
+/// would allow users to experiment with different architectures without recompiling.
 pub const LAYERS: [usize; 4] = [8, 16, 4, 1];
 
-/// Number of input neurons. These correspond to the game state variables fed to the network.
+/// Number of input neurons. These correspond to the 8 game state variables fed to the network:
+/// 1.  `own_paddle.y`      - This paddle's y-position.
+/// 2.  `own_paddle.vy`     - This paddle's vertical velocity.
+/// 3.  `opponent_paddle.y` - The opponent's y-position.
+/// 4.  `opponent_paddle.vy`- The opponent's vertical velocity.
+/// 5.  `ball.x`            - The ball's x-position.
+/// 6.  `ball.y`            - The ball's y-position.
+/// 7.  `ball.vx`           - The ball's x-velocity.
+/// 8.  `ball.vy`           - The ball's y-velocity.
 pub const INPUT_SIZE: usize = LAYERS[0];
+
 /// Number of neurons in the first hidden layer.
 pub const HIDDEN1_SIZE: usize = LAYERS[1];
+
 /// Number of neurons in the second hidden layer.
 pub const HIDDEN2_SIZE: usize = LAYERS[2];
-/// Number of output neurons. This corresponds to the paddle's desired movement.
+
+/// Number of output neurons. The single output value represents the desired vertical
+/// velocity of the paddle, which is then scaled and clamped before being applied.
 pub const OUTPUT_SIZE: usize = LAYERS[3];
 
 /// The number of weights connecting the input layer to the first hidden layer.
@@ -108,7 +126,8 @@ pub const L2_WEIGHTS: usize = HIDDEN2_SIZE * (HIDDEN1_SIZE + 1);
 /// The number of weights connecting the second hidden layer to the output layer.
 pub const L3_WEIGHTS: usize = OUTPUT_SIZE * (HIDDEN2_SIZE + 1);
 
-/// The total number of weights (genes) in an individual's genome.
-/// This is the sum of all weights in all layers and represents the total number of
-/// parameters the genetic algorithm needs to optimize.
+/// The total number of weights in an individual's genome.
+/// This value defines the length of the `Vec<f32>` or array that holds the genetic
+/// material for one neural network. It is the sum of all weights in all layers and
+/// represents the total number of parameters the genetic algorithm needs to optimize.
 pub const TOTAL_WEIGHTS: usize = L1_WEIGHTS + L2_WEIGHTS + L3_WEIGHTS;

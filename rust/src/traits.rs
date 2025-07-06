@@ -7,6 +7,7 @@
 use crate::config::{Activation, Config};
 use crate::constants::{INPUT_SIZE, OUTPUT_SIZE, TOTAL_WEIGHTS};
 use rand::Rng;
+use std::fs::File;
 use std::io::Write;
 
 /// Defines the required behavior for any neural network implementation (an "individual").
@@ -40,9 +41,11 @@ pub trait Individual: Default + Clone + Send + Sync {
     /// Creates a new child individual by performing crossover between two parents.
     ///
     /// # Teaching Note
-    /// Crossover (or recombination) is a fundamental genetic operator. This function implements
-    /// uniform crossover: for each weight, it's randomly chosen from one of the two parents.
-    /// This allows the child to inherit a mix of traits from both.
+    /// Crossover (or recombination) is a fundamental genetic operator. This default
+    /// implementation uses **uniform crossover**: for each weight in the genome, it's
+    /// randomly chosen from one of the two parents. This allows the child to inherit a
+    /// fine-grained mix of traits. Other strategies, like single-point or two-point
+    /// crossover, are also common but uniform crossover is simple and often effective.
     fn crossover<R: Rng>(&self, other: &Self, rng: &mut R) -> Self {
         let mut child = Self::default();
         let parent1_weights = self.weights_as_slice();
@@ -62,9 +65,12 @@ pub trait Individual: Default + Clone + Send + Sync {
     /// Applies mutation to the individual's weights.
     ///
     /// # Teaching Note
-    /// Mutation introduces new genetic material into the population, preventing stagnation.
-    /// This implementation iterates through each weight and, with a small probability
-    /// (`mutation_rate`), perturbs the weight by a random amount (`mutation_strength`).
+    /// Mutation introduces new genetic material into the population, preventing premature
+    /// convergence and exploring new areas of the solution space. This function iterates
+    /// through each weight and applies mutation based on two key parameters:
+    /// - `mutation_rate`: The probability that any single weight will be mutated.
+    /// - `mutation_strength`: The maximum amount by which a weight can be changed.
+    /// Tuning these values is critical to the success of a genetic algorithm.
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
         let weights = self.weights_as_mut_slice();
         for i in 0..TOTAL_WEIGHTS {
@@ -75,21 +81,64 @@ pub trait Individual: Default + Clone + Send + Sync {
     }
 
     /// Provides a read-only view of the individual's weights (its "genome").
+    ///
+    /// # Teaching Note
+    /// This method is a crucial piece of the abstraction. It allows the default `crossover`
+    /// and `mutate` methods to work on the individual's weights without needing to know
+    /// *how* those weights are stored (e.g., in a stack array for `StackIndividual` or a
+    /// heap-allocated `Vec` for `HeapIndividual`).
     fn weights_as_slice(&self) -> &[f32];
 
     /// Provides a mutable view of the individual's weights.
     fn weights_as_mut_slice(&mut self) -> &mut [f32];
 
-    /// Saves the individual's weights to a binary file.
+    /// Loads an individual and its configuration from a binary file.
     ///
-    /// # Safety
-    /// The `unsafe` block is used for a highly efficient serialization. It is safe because:
-    /// 1. We are converting a slice of `f32` into a slice of bytes (`u8`).
-    /// 2. `f32` has a stable, platform-independent memory representation (IEEE 754).
-    /// 3. The lifetime of the byte slice is tied to the weight slice, ensuring no dangling pointers.
-    /// This avoids slower, byte-by-byte serialization.
-    fn save(&self, path: &str) -> std::io::Result<()> {
-        let mut file = std::fs::File::create(path)?;
+    /// # Returns
+    /// A `Result` containing a tuple of the loaded `Individual` and its `Config`,
+    /// or an error if loading fails.
+    ///
+    /// # Teaching Note
+    /// This associated function (like a static method) is responsible for deserialization.
+    /// It reads the metadata header first, then the raw weight data, and constructs a new
+    /// individual. This is an example of the **Factory Pattern**. Each engine must provide
+    /// its own implementation because the way weights are stored internally (e.g., a stack
+    /// array vs. a heap vector) differs. The function returns a `Box<dyn std::error::Error>`
+    /// to gracefully handle different potential failure modes, like file-not-found I/O
+    // errors or malformed JSON parsing errors.
+    fn load(path: &str) -> Result<(Self, Config), Box<dyn std::error::Error>>
+    where
+        Self: Sized;
+
+    /// Saves the individual's weights and configuration to a binary file.
+    ///
+    /// # File Format
+    /// The method serializes the individual into a custom binary format:
+    /// 1.  **Config Length (8 bytes)**: A `u64` (little-endian) indicating the size of the
+    ///     following JSON configuration string.
+    /// 2.  **Config Data (variable size)**: The UTF-8 encoded JSON string of the `Config` struct.
+    ///     This stores all hyperparameters used during training.
+    /// 3.  **Weight Data (variable size)**: The raw `f32` weights of the neural network, written
+    ///     directly from memory.
+    ///
+    /// # Teaching Note: `unsafe` for Performance
+    /// The `unsafe` block is used for a highly efficient serialization of the `f32` weights.
+    /// Instead of iterating and writing each float one by one, it reinterprets the `&[f32]`
+    /// slice as a `&[u8]` byte slice and writes the entire block of memory at once.
+    /// This is considered safe because primitive types like `f32` have a standardized,
+    /// stable memory representation (IEEE 754) and no padding bytes, so the direct memory
+    /// copy is valid.
+    fn save(&self, path: &str, config: &Config) -> std::io::Result<()> {
+        let mut file = File::create(path)?;
+
+        // 1. Serialize config to JSON and write its length and data
+        let config_json = serde_json::to_string_pretty(config)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let config_bytes = config_json.as_bytes();
+        file.write_all(&(config_bytes.len() as u64).to_le_bytes())?;
+        file.write_all(config_bytes)?;
+
+        // 2. Write the raw weights
         let weights_slice = self.weights_as_slice();
         assert_eq!(
             weights_slice.len(),

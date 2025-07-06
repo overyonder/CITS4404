@@ -2,6 +2,7 @@ use crate::{config::Config, gamestate::GameState, traits::Individual};
 use rand::prelude::*;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
+use tracing::{debug, trace};
 
 /// Represents a population of individuals (neural networks) for evolutionary training.
 ///
@@ -63,50 +64,75 @@ impl<I: Individual> Population<I> {
     /// # Teaching Note
     /// This is a common approach for fitness evaluation in competitive co-evolution.
     /// The fitness of an individual is relative to the performance of others in the
-    /// current population.
+    /// current population. The round-robin tournament has a time complexity of O(n²),
+    /// where n is the population size, as it requires n * (n-1) / 2 games. This can
+    /// become a significant bottleneck, which motivates the concurrent version.
     pub fn evaluate_fitness(&mut self) {
+        trace!("Resetting fitness scores.");
         for fitness in self.fitness.iter() {
             fitness.store(0, Ordering::Relaxed);
         }
         let mut game_state = GameState::new();
 
+        let total_games = self.config.population_size * (self.config.population_size - 1) / 2;
+        trace!(total_games, "Starting sequential round-robin tournament.");
+
         for i in 0..self.config.population_size {
             for j in (i + 1)..self.config.population_size {
+                trace!(player1 = i, player2 = j, "Simulating game.");
                 let (returns_i, returns_j) =
                     game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
                 self.fitness[i].fetch_add(returns_i, Ordering::Relaxed);
                 self.fitness[j].fetch_add(returns_j, Ordering::Relaxed);
             }
         }
+        trace!("Sequential round-robin tournament finished.");
     }
 
     /// A parallel version of `evaluate_fitness` using the Rayon crate.
     ///
     /// # Memory/Threading
-    /// - The outer loop over individuals is parallelized.
-    /// - A new `GameState` is created per thread to prevent data races.
+    /// - A list of all unique game pairings is created upfront.
+    /// - Rayon's `par_iter` distributes these pairings across available threads.
+    /// - A new `GameState` is created per game to prevent data races.
     /// - Fitness scores are updated atomically using `AtomicU32`.
     ///
-    /// # Teaching Note
-    /// This demonstrates how CPU-bound tasks like fitness evaluation can be easily
-    /// parallelized in Rust with Rayon, often providing a significant speedup on
-    /// multi-core processors.
+    /// # Teaching Note: Concurrency with Rayon and Atomics
+    /// This function demonstrates a robust pattern for parallelization. A "work list" (the
+    /// `pairs` vector) is created upfront, and Rayon's `par_iter` efficiently distributes
+    /// these pairings across all available CPU cores.
+    ///
+    /// To prevent data races when updating fitness scores from multiple threads
+    /// simultaneously, we use `AtomicU32`. The `fetch_add` operation ensures that
+    /// increments are thread-safe. We use `Ordering::Relaxed` because the order in which
+    /// fitness scores are added doesn't matter; we only need the final sum to be correct.
+    /// This is the weakest (and often fastest) memory ordering, making it ideal for
+    /// counters like this.
     pub fn evaluate_fitness_concurrent(&mut self) {
+        trace!("Resetting fitness scores.");
         for fitness in self.fitness.iter() {
             fitness.store(0, Ordering::Relaxed);
         }
-        let config = self.config;
-        (0..self.config.population_size)
-            .into_par_iter()
-            .for_each(|i| {
-                let mut game_state = GameState::new();
-                for j in (i + 1)..config.population_size {
-                    let (returns_i, returns_j) =
-                        game_state.simulate(&self.individuals[i], &self.individuals[j], &config);
-                    self.fitness[i].fetch_add(returns_i, Ordering::Relaxed);
-                    self.fitness[j].fetch_add(returns_j, Ordering::Relaxed);
-                }
-            });
+
+        let pop_size = self.config.population_size;
+        let pairs: Vec<(usize, usize)> = (0..pop_size)
+            .flat_map(|i| (i + 1..pop_size).map(move |j| (i, j)))
+            .collect();
+
+        trace!(
+            total_games = pairs.len(),
+            "Starting concurrent round-robin tournament."
+        );
+
+        pairs.par_iter().for_each(|&(i, j)| {
+            // Create a new GameState for each simulation to ensure thread safety.
+            let mut game_state = GameState::new();
+            let (returns_i, returns_j) =
+                game_state.simulate(&self.individuals[i], &self.individuals[j], &self.config);
+            self.fitness[i].fetch_add(returns_i, Ordering::Relaxed);
+            self.fitness[j].fetch_add(returns_j, Ordering::Relaxed);
+        });
+        trace!("Concurrent round-robin tournament finished.");
     }
 
     /// Selects the fittest individuals and returns their indices, sorted by fitness.
@@ -114,9 +140,12 @@ impl<I: Individual> Population<I> {
     /// # Returns
     /// A `Vec<usize>` of indices, sorted from highest fitness to lowest.
     ///
-    /// # Teaching Note
-    /// This is the "selection" phase of a genetic algorithm. The sorted list of
-    /// elites is used in the next step to produce the next generation.
+    /// # Teaching Note: Elitism
+    /// This is the "selection" phase of a genetic algorithm. By sorting the individuals
+    /// by fitness, we can identify the top performers, or "elites". The concept of
+    /// **elitism** involves carrying over the best individuals to the next generation,
+    /// either directly or by making them the exclusive parents for new offspring. This
+    /// ensures that the best solutions found so far are not lost.
     pub fn select_elites(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.config.population_size).collect();
         // Sort by fitness descending. `std::cmp::Reverse` is a convenient wrapper
@@ -126,6 +155,21 @@ impl<I: Individual> Population<I> {
     }
 
     /// Fills the next generation with offspring from elites, using crossover and mutation.
+    ///
+    /// # Algorithm
+    /// 1.  Identify the `elite_count` best individuals from `sorted_indices` to act as parents.
+    /// 2.  Iterate through the `population_size - elite_count` worst-performing individuals,
+    ///     which are slated for replacement.
+    /// 3.  For each individual to be replaced:
+    ///     a. Randomly select two parents from the elite pool.
+    ///     b. Create a new `child` by performing `crossover` on the two parents.
+    ///     c. Apply `mutate` to the new child to introduce genetic diversity.
+    ///     d. Replace the old, underperforming individual with the new child.
+    ///
+    /// # Teaching Note
+    /// This function implements the "reproduction" phase. It ensures that the genetic
+    /// material from the most successful individuals is passed on, while mutation continues
+    /// to explore the solution space.
     fn recombination_and_mutation(&mut self, sorted_indices: &[usize]) {
         let mut rng = thread_rng();
         let elite_count = self.config.elite_count;
@@ -166,34 +210,52 @@ impl<I: Individual> Population<I> {
     /// # Algorithm
     /// This is the main loop of the genetic algorithm:
     /// 1. For each generation:
-    ///    - Evaluate all individuals.
-    ///    - Select the elites.
-    ///    - Invoke the `on_progress` callback with the current stats.
-    ///    - Fill the next generation with offspring via crossover and mutation.
-    /// 2. After the final generation, save the best-performing genome to a file.
-    pub fn evolve<F>(&mut self, mut on_progress: F)
+    ///    a. Evaluate all individuals using either the sequential or concurrent method.
+    ///    b. Select the elites by sorting individuals based on their fitness scores.
+    ///    c. Invoke the `on_progress` callback with the current generation's statistics.
+    ///       This decouples the core logic from the UI and allows for early stopping.
+    ///    d. Fill the next generation with offspring via crossover and mutation.
+    /// 2. After all generations are complete, return the best-performing individual found.
+    ///
+    /// # Teaching Note: The Callback Pattern
+    /// The `on_progress` closure is a powerful **callback pattern**. It allows the caller
+    /// (e.g., the TUI or CLI) to monitor the evolution in real-time. By returning a `bool`,
+    /// the callback can also signal the `evolve` loop to terminate early, which is useful
+    /// for implementing a "stop" button in a user interface.
+    pub fn evolve<F>(&mut self, mut on_progress: F) -> I
     where
         F: FnMut(u32, u32, f32, u32, &[f32]) -> bool, // Return bool to continue
     {
+        debug!(generations = self.config.generations, "Starting evolution loop.");
         for gen in 0..self.config.generations {
+            debug!(generation = gen + 1, "Starting generation.");
+
+            trace!("Evaluating fitness...");
             if self.config.concurrent {
                 self.evaluate_fitness_concurrent();
             } else {
                 self.evaluate_fitness();
             }
+            trace!("Fitness evaluation complete.");
 
+            trace!("Selecting elites...");
             let sorted_indices = self.select_elites();
+            trace!("Elite selection complete.");
 
             let best_fitness = self.fitness[sorted_indices[0]].load(Ordering::Relaxed);
-            let worst_fitness =
-                self.fitness[sorted_indices[self.config.population_size - 1]].load(Ordering::Relaxed);
-            let average_fitness =
-                self.fitness.iter().map(|f| f.load(Ordering::Relaxed)).sum::<u32>() as f32
-                    / self.config.population_size as f32;
+            let worst_fitness = self.fitness[sorted_indices[self.config.population_size - 1]]
+                .load(Ordering::Relaxed);
+            let average_fitness = self
+                .fitness
+                .iter()
+                .map(|f| f.load(Ordering::Relaxed))
+                .sum::<u32>() as f32
+                / self.config.population_size as f32;
 
             let best_individual = &self.individuals[sorted_indices[0]];
 
             // Invoke the callback. If it returns false, stop the evolution.
+            trace!("Invoking on_progress callback...");
             if !on_progress(
                 gen + 1,
                 best_fitness,
@@ -201,20 +263,21 @@ impl<I: Individual> Population<I> {
                 worst_fitness,
                 best_individual.weights_as_slice(),
             ) {
-                return; // Early exit requested by the caller.
+                // Early exit requested by the caller. Return the best individual found so far.
+                debug!(generation = gen + 1, "Evolution stopped early by callback.");
+                return self.individuals[sorted_indices[0]].clone();
             }
+            trace!("on_progress callback finished.");
 
+            trace!("Performing recombination and mutation...");
             self.recombination_and_mutation(&sorted_indices);
+            trace!("Recombination and mutation complete.");
+            debug!(generation = gen + 1, "Generation complete.");
         }
 
-        // After evolution, find the best individual and save it.
+        // After evolution, find and return the best individual.
+        debug!("Evolution loop finished. Selecting final best individual.");
         let sorted_indices = self.select_elites();
-        let best_individual = self.individuals[sorted_indices[0]].clone();
-        let file_name = format!("best_{}.net", I::name());
-        if let Err(e) = best_individual.save(&file_name) {
-            println!("Error saving best network: {}", e);
-        } else {
-            println!("Best network saved to {}", file_name);
-        }
+        self.individuals[sorted_indices[0]].clone()
     }
 }

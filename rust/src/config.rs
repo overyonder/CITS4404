@@ -4,6 +4,7 @@
 //! evolutionary algorithm and the neural network engines. It is designed to be
 //! clear, well-documented, and easy to extend.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Selects the underlying engine for neural network representation and computation.
@@ -14,12 +15,13 @@ use std::fmt;
 /// # Teaching Note
 /// This enum demonstrates how to represent a set of mutually exclusive choices. The `Display`
 /// trait is implemented for user-friendly string representation, which is more idiomatic
-/// than a custom `to_str()` method.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// than a custom `to_str()` method. Deriving `Default` is also idiomatic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Engine {
     /// **Stack-allocated:** Uses fixed-size arrays on the stack for genomes. This is extremely
     /// fast due to superior cache locality and zero allocation overhead, but the network size
     /// is fixed at compile time.
+    #[default]
     Stack,
     /// **Heap-allocated:** Uses `Vec<f32>` on the heap for genomes. This is more flexible,
     /// allowing for dynamic network sizes, but may be slower due to heap allocation
@@ -51,13 +53,17 @@ impl fmt::Display for Engine {
 /// Each fitness function has different characteristics and rewards different behaviors.
 /// The choice of fitness function is a trade-off between exploration, exploitation, and
 /// convergence speed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize, Default)]
 pub enum FitnessFunc {
-    /// Original C++ fitness function, rewarding survival time and returns.
+    /// **C++ Equivalent:** Rewards survival time (number of frames) and successful returns.
+    /// This is a direct port of the original logic for apples-to-apples performance comparison.
     CppEquivalent,
-    /// A balanced approach rewarding returns, with penalties for time.
+    /// **Balanced:** A balanced approach that primarily rewards successful returns, with a minor
+    /// penalty for game duration. This encourages efficient play over mere survival.
+    #[default]
     Balanced,
-    /// Rewards performance, winning, and longer rallies.
+    /// **Performance:** Aggressively rewards winning rallies and longer rallies, encouraging
+    /// more complex and skillful play.
     Performance,
 }
 
@@ -82,7 +88,7 @@ impl fmt::Display for FitnessFunc {
 /// `Default` trait, we provide a sensible baseline configuration. Users can then
 /// instantiate a default and modify only the fields they care about, either in code
 /// or through the CLI parser.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Config {
     /// The neural network engine to use.
     pub engine: Engine,
@@ -100,7 +106,8 @@ pub struct Config {
     /// cycle of evaluation, selection, and reproduction.
     pub generations: u32,
     /// If `true`, fitness evaluation is parallelized across available CPU cores using Rayon.
-    /// This provides a significant speedup for CPU-bound engines (`Stack`, `Heap`, `Simd`).
+    /// This provides a significant speedup for CPU-bound engines (`Stack`, `Heap`, `Simd`)
+    /// and has no effect on the `Gpu` engine.
     pub concurrent: bool,
     /// The number of individuals in the population. A larger population maintains more
     /// genetic diversity, reducing the risk of premature convergence, but increases the
@@ -125,12 +132,12 @@ impl Default for Config {
             generations: 100,
             mutation_rate: 0.05,      // 5% chance to mutate a gene
             mutation_strength: 0.1, // Mutate by up to +/- 10%
-            engine: Engine::Stack,
+            engine: Engine::default(),
             concurrent: false,
-            activation: Activation::Tanh,
+            activation: Activation::default(),
             population_size: 128,
             elite_count: 2, // Keep the top 2 individuals
-            fitness_func: FitnessFunc::Balanced,
+            fitness_func: FitnessFunc::default(),
         }
     }
 }
@@ -141,10 +148,11 @@ impl Default for Config {
 /// Enums are perfect for representing a fixed set of choices. Implementing `Display`
 /// makes them easy to print in the UI and logs. `PartialEq` and `Eq` allow them to be
 /// compared, which is useful in the TUI for showing the selected item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Activation {
     /// **Hyperbolic Tangent:** A smooth, zero-centered function that squashes values to `[-1, 1]`.
     /// Good for general purpose use.
+    #[default]
     Tanh,
     /// **Rectified Linear Unit:** Outputs `max(0, x)`. It's computationally very efficient
     /// and helps with the vanishing gradient problem, but it's not zero-centered.
