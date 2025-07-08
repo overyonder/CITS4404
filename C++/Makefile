@@ -10,6 +10,7 @@ RELEASE_FLAGS = -O3 -DNDEBUG
 SRC_DIR = src
 APPS_DIR = apps
 BUILD_DIR = build
+BIN_DIR = bin
 CORE_DIR = $(SRC_DIR)/core
 AI_DIR = $(SRC_DIR)/ai
 PLAYERS_DIR = $(AI_DIR)/players
@@ -21,16 +22,19 @@ PLAYER_OBJS = $(BUILD_DIR)/neural_player.o $(BUILD_DIR)/simple_player.o
 ALL_OBJS = $(CORE_OBJS) $(AI_OBJS) $(PLAYER_OBJS)
 
 # Executable names
-TRAIN_EXE = pong_evolution
-REPLAY_EXE = pong_replay
-DEMO_EXE = pong_demo
+TRAIN_EXE = $(BIN_DIR)/pong_evolution
+REPLAY_EXE = $(BIN_DIR)/pong_replay
+TEST_EXE = $(BIN_DIR)/test_display
 
 # Default target
-all: $(TRAIN_EXE) $(REPLAY_EXE) $(DEMO_EXE)
+all: $(TRAIN_EXE) $(REPLAY_EXE) $(TEST_EXE)
 
-# Create build directory
+# Create build directories
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
 
 # Core object files
 $(BUILD_DIR)/geometry.o: $(CORE_DIR)/geometry.cpp $(CORE_DIR)/geometry.hpp | $(BUILD_DIR)
@@ -54,13 +58,13 @@ $(BUILD_DIR)/simple_player.o: $(PLAYERS_DIR)/simple_player.cpp $(PLAYERS_DIR)/si
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Executables
-$(TRAIN_EXE): $(APPS_DIR)/train_evolution.cpp $(ALL_OBJS)
+$(TRAIN_EXE): $(APPS_DIR)/train_evolution.cpp $(ALL_OBJS) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< $(ALL_OBJS) -o $@
 
-$(REPLAY_EXE): $(APPS_DIR)/replay_player.cpp $(CORE_OBJS) $(BUILD_DIR)/neural_player.o $(BUILD_DIR)/neural_net.o
+$(REPLAY_EXE): $(APPS_DIR)/replay_player.cpp $(CORE_OBJS) $(BUILD_DIR)/neural_player.o $(BUILD_DIR)/neural_net.o | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< $(CORE_OBJS) $(BUILD_DIR)/neural_player.o $(BUILD_DIR)/neural_net.o -o $@
 
-$(DEMO_EXE): $(APPS_DIR)/demo_game.cpp $(CORE_OBJS) $(BUILD_DIR)/simple_player.o
+$(TEST_EXE): $(APPS_DIR)/test_display.cpp $(CORE_OBJS) $(BUILD_DIR)/simple_player.o | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< $(CORE_OBJS) $(BUILD_DIR)/simple_player.o -o $@
 
 # Debug builds
@@ -73,7 +77,7 @@ release: all
 
 # Clean build artifacts
 clean:
-	rm -rf $(BUILD_DIR) $(TRAIN_EXE) $(REPLAY_EXE) $(DEMO_EXE) fittest.log
+	rm -rf $(BUILD_DIR) $(BIN_DIR) fittest.log
 
 # Test build (just compile, don't run)
 test-build: all
@@ -92,6 +96,6 @@ help:
 	@echo "Executables:"
 	@echo "  $(TRAIN_EXE)   - Main neuroevolution training program"
 	@echo "  $(REPLAY_EXE)     - Replay/visualize evolved players"
-	@echo "  $(DEMO_EXE)       - Demo with simple AI players"
+	@echo "  $(TEST_EXE)       - Demo with improved terminal display"
 
 .PHONY: all debug release clean test-build help 
