@@ -2,6 +2,10 @@
 
 This project provides Rust and C++ implementations of a neural network-driven Pong game, designed for benchmarking, teaching, and comparing evolutionary algorithms across different languages and hardware architectures.
 
+## Acknowledgements
+
+The original C++ version is by @gozzarda, who wrote essentially the entire thing himself 10 years ago as part of our group project (carrying the rest of us along the way). Given he's a competitive programmer, it took me a while to catch up to his code, but I found it to be a great learning experience revisiting this a decade later!
+
 ## ✨ Features
 
 - **Dual Implementations:** Full-featured Rust application and a legacy C++ version for comparison.
