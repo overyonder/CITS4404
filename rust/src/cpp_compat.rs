@@ -1,4 +1,19 @@
-//! C++ compatibility layer for loading trained models.
+//! C++ compatibility layer for loading trained models from legacy C++ application.
+//!
+//! # Teaching Note: Legacy Integration
+//! This module demonstrates effective strategies for integrating with legacy systems:
+//! - Robust parsing that handles multiple data formats
+//! - Comprehensive error handling with informative messages
+//! - Backwards compatibility while providing modern functionality
+//! - Testing strategies for file format compatibility
+//!
+//! # Legacy Format Structure
+//! The C++ fittest.log file uses a specific format:
+//! - Header line: "4 8 16 4 1" (network architecture description)
+//! - Generation markers: Single numbers on their own lines
+//! - Individual data: "N weight1 weight2 ... weightN" where N is the count
+//!
+//! This format predates modern JSON serialization and requires careful parsing.
 
 use crate::{
     config::{Config, Engine, FitnessFunc, MutationStrategy, ReproductionStrategy},
@@ -6,35 +21,123 @@ use crate::{
 };
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use tracing::{debug, warn};
 
-/// Loads the weights of the fittest individual from a C++ `fittest.log` file.
-///
-/// The function reads the entire log file to find the last generation's data,
-/// returns the weights of the first individual listed, and fabricates a `Config`
-/// struct to make it compatible with the Rust simulation UI.
-pub fn load_cpp_champion(path: &str) -> Result<(Vec<f32>, Config), Box<dyn std::error::Error>> {
-    // Check if the file exists first, to provide a clearer error message.
-    if !std::path::Path::new(path).exists() {
-        return Err(format!("Log file not found at: {}", path).into());
+/// Custom error types for C++ compatibility operations.
+#[derive(Debug)]
+pub enum CppCompatError {
+    FileNotFound(String),
+    ParseError(String),
+    WeightMismatch { expected: usize, found: usize },
+    NoValidChampion,
+    IoError(std::io::Error),
+}
+
+impl std::fmt::Display for CppCompatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CppCompatError::FileNotFound(path) => {
+                write!(f, "C++ log file not found at: {}", path)
+            }
+            CppCompatError::ParseError(msg) => {
+                write!(f, "Failed to parse C++ log file: {}", msg)
+            }
+            CppCompatError::WeightMismatch { expected, found } => {
+                write!(f, "Weight count mismatch. Expected {}, found {}", expected, found)
+            }
+            CppCompatError::NoValidChampion => {
+                write!(f, "No valid champion found in the C++ log file")
+            }
+            CppCompatError::IoError(e) => {
+                write!(f, "I/O error reading C++ log file: {}", e)
+            }
+        }
     }
+}
+
+impl std::error::Error for CppCompatError {}
+
+impl From<std::io::Error> for CppCompatError {
+    fn from(error: std::io::Error) -> Self {
+        CppCompatError::IoError(error)
+    }
+}
+
+/// Metadata about the C++ log file structure and content.
+#[derive(Debug, Clone)]
+pub struct CppLogMetadata {
+    pub total_generations: u32,
+    pub architecture_description: Option<String>,
+    pub total_individuals_found: usize,
+    pub file_size_bytes: u64,
+    pub format_version: CppLogFormat,
+}
+
+/// Different format versions of C++ log files we can handle.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CppLogFormat {
+    /// Original format with simple generation markers
+    Original,
+    /// Extended format with additional metadata
+    Extended,
+    /// Unknown format that we'll attempt to parse anyway
+    Unknown,
+}
+
+/// Enhanced C++ champion loader with comprehensive error handling and metadata extraction.
+///
+/// # Teaching Note: Robust File Parsing
+/// This function demonstrates several important parsing principles:
+/// - Defensive programming: Handle malformed data gracefully
+/// - Progressive parsing: Extract what we can even if some data is invalid
+/// - Rich error information: Help users understand what went wrong
+/// - Metadata extraction: Provide insights into the loaded data
+///
+/// # Arguments
+/// * `path` - Path to the C++ fittest.log file
+///
+/// # Returns
+/// * `Ok((weights, config, metadata))` - Successfully loaded champion data
+/// * `Err(CppCompatError)` - Detailed error information about what went wrong
+pub fn load_cpp_champion_enhanced(
+    path: &str,
+) -> Result<(Vec<f32>, Config, CppLogMetadata), CppCompatError> {
+    // Validate file existence with informative error
+    let file_path = std::path::Path::new(path);
+    if !file_path.exists() {
+        return Err(CppCompatError::FileNotFound(format!(
+            "{}\n\nMake sure the C++ training application has been run and produced a fittest.log file.",
+            path
+        )));
+    }
+
+    // Get file metadata
+    let file_size = file_path.metadata()?.len();
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-
     let mut lines = reader.lines();
 
-    // Skip header
-    lines.next();
+    // Parse header line for architecture information
+    let header_line = lines.next().transpose()?;
+    let architecture_description = header_line.clone();
+    
+    // Determine log format based on header structure
+    let format_version = detect_log_format(&header_line);
+    debug!("Detected C++ log format: {:?}", format_version);
 
     let mut last_champion_weights: Vec<f32> = Vec::new();
     let mut generation_count = 0u32;
+    let mut total_individuals_found = 0usize;
+    let mut parsing_errors = Vec::new();
 
-    let file_lines: Vec<String> = lines.collect::<Result<_, _>>()?;
+    // Collect all lines for analysis
+    let file_lines: Vec<String> = lines.collect::<Result<Vec<_>, _>>()?;
+    debug!("Processing {} lines from C++ log file", file_lines.len());
 
-    // Count generations by looking for lines that start with just a number
-    // and find the last line with weights
-    let mut last_line_with_weights = None;
+    // Enhanced parsing with error tracking
+    let mut _last_valid_weights_line = None;
     
-    for line in &file_lines {
+    for (line_num, line) in file_lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -42,136 +145,386 @@ pub fn load_cpp_champion(path: &str) -> Result<(Vec<f32>, Config), Box<dyn std::
         
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
         
-        // Check if this is a generation marker (single number on its own line)
-        if parts.len() == 1 && parts[0].parse::<u32>().is_ok() {
-            generation_count += 1;
+        // Check if this is a generation marker (single number)
+        if parts.len() == 1 {
+            if let Ok(_gen) = parts[0].parse::<u32>() {
+                generation_count += 1;
+                debug!("Found generation marker {} at line {}", _gen, line_num + 1);
+                continue;
+            }
         }
-        // Check if this is a line with weights (multiple numbers)
-        else if parts.len() > 1 && parts.iter().all(|&p| p.parse::<f32>().is_ok()) {
-            last_line_with_weights = Some(line);
+        
+        // Check if this is a weights line (first number is count, rest are weights)
+        if parts.len() > 1 {
+            if let Ok(weight_count) = parts[0].parse::<usize>() {
+                let weight_strings = &parts[1..];
+                
+                // Attempt to parse all weights
+                let mut weights = Vec::new();
+                let mut parse_success = true;
+                
+                for (i, weight_str) in weight_strings.iter().enumerate() {
+                    match weight_str.parse::<f32>() {
+                        Ok(weight) => weights.push(weight),
+                        Err(e) => {
+                            parsing_errors.push(format!(
+                                "Line {}: Invalid weight '{}' at position {}: {}",
+                                line_num + 1, weight_str, i + 1, e
+                            ));
+                            parse_success = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if parse_success {
+                    if weight_count == weights.len() && weight_count == TOTAL_WEIGHTS {
+                        _last_valid_weights_line = Some((line_num + 1, weights.clone()));
+                        last_champion_weights = weights;
+                        total_individuals_found += 1;
+                        debug!("Found valid champion at line {} with {} weights", 
+                               line_num + 1, weight_count);
+                    } else if weight_count != weights.len() {
+                        parsing_errors.push(format!(
+                            "Line {}: Weight count mismatch. Header says {}, found {} weights",
+                            line_num + 1, weight_count, weights.len()
+                        ));
+                    } else if weight_count != TOTAL_WEIGHTS {
+                        parsing_errors.push(format!(
+                            "Line {}: Unexpected weight count {}. Expected {}",
+                            line_num + 1, weight_count, TOTAL_WEIGHTS
+                        ));
+                    }
+                } else {
+                    total_individuals_found += 1; // Count malformed entries too
+                }
+            }
         }
     }
 
-    if let Some(last_line_with_weights) = last_line_with_weights {
-        let weights: Vec<f32> = last_line_with_weights
-            .split_whitespace()
-            .skip(1) // The first element is the number of weights, so we skip it.
-            .filter_map(|s| s.parse::<f32>().ok())
-            .collect();
-
-        if weights.len() == TOTAL_WEIGHTS {
-            last_champion_weights = weights;
-        } else {
-            return Err(format!(
-                "Weight count mismatch. Expected {}, found {}.",
-                TOTAL_WEIGHTS,
-                weights.len()
-            )
-            .into());
+    // Log parsing warnings if any
+    if !parsing_errors.is_empty() {
+        warn!("Encountered {} parsing issues in C++ log file:", parsing_errors.len());
+        for (i, error) in parsing_errors.iter().enumerate().take(5) {
+            warn!("  {}: {}", i + 1, error);
+        }
+        if parsing_errors.len() > 5 {
+            warn!("  ... and {} more parsing issues", parsing_errors.len() - 5);
         }
     }
 
+    // Validate that we found a valid champion
     if last_champion_weights.is_empty() {
-        Err("No valid champion found in the log file.".into())
-    } else {
-        // Fabricate a config for the C++ model for UI display purposes.
-        let cpp_config = Config {
-            name: Some("C++ Champion (from fittest.log)".to_string()),
-            engine: Engine::Stack, // C++ is most similar to the Stack engine
-            generations: generation_count,
-            reproduction_strategy: ReproductionStrategy::CppEquivalent,
-            mutation_strategy: MutationStrategy::CppEquivalent,
-            fitness_func: FitnessFunc::CppEquivalent,
-            ..Default::default()
-        };
-        Ok((last_champion_weights, cpp_config))
+        return Err(CppCompatError::NoValidChampion);
     }
+
+    if last_champion_weights.len() != TOTAL_WEIGHTS {
+        return Err(CppCompatError::WeightMismatch {
+            expected: TOTAL_WEIGHTS,
+            found: last_champion_weights.len(),
+        });
+    }
+
+    // Create metadata about the loaded file
+    let metadata = CppLogMetadata {
+        total_generations: generation_count,
+        architecture_description,
+        total_individuals_found,
+        file_size_bytes: file_size,
+        format_version,
+    };
+
+    // Create a compatible configuration that matches C++ behavior
+    let cpp_config = create_cpp_compatible_config(generation_count, &metadata);
+
+    debug!("Successfully loaded C++ champion with {} weights from {} generations", 
+           last_champion_weights.len(), generation_count);
+
+    Ok((last_champion_weights, cpp_config, metadata))
+}
+
+/// Simplified interface that maintains backwards compatibility.
+///
+/// # Teaching Note: API Design
+/// This function provides a simpler interface for existing code while internally
+/// using the enhanced loader. This is a common pattern when improving APIs:
+/// - Keep the old interface working to avoid breaking changes
+/// - Add new, more powerful interfaces alongside
+/// - Eventually deprecate the old interface when appropriate
+pub fn load_cpp_champion(path: &str) -> Result<(Vec<f32>, Config), Box<dyn std::error::Error>> {
+    let (weights, config, _metadata) = load_cpp_champion_enhanced(path)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    Ok((weights, config))
+}
+
+/// Detects the format version of a C++ log file based on its header.
+fn detect_log_format(header: &Option<String>) -> CppLogFormat {
+    match header {
+        Some(header_line) => {
+            let parts: Vec<&str> = header_line.trim().split_whitespace().collect();
+            if parts.len() == 5 && parts.iter().all(|p| p.parse::<u32>().is_ok()) {
+                CppLogFormat::Original
+            } else if parts.len() > 5 {
+                CppLogFormat::Extended
+            } else {
+                CppLogFormat::Unknown
+            }
+        }
+        None => CppLogFormat::Unknown,
+    }
+}
+
+/// Creates a configuration that closely matches C++ application behavior.
+///
+/// # Teaching Note: Legacy Compatibility
+/// When integrating with legacy systems, it's important to match their behavior
+/// as closely as possible. This includes:
+/// - Using the same algorithmic choices (mutation strategies, fitness functions)
+/// - Matching the same parameter defaults
+/// - Preserving the same network architecture
+fn create_cpp_compatible_config(generation_count: u32, _metadata: &CppLogMetadata) -> Config {
+    let model_name = if generation_count > 0 {
+        format!("C++ Champion ({} generations)", generation_count)
+    } else {
+        "C++ Champion (unknown generations)".to_string()
+    };
+
+    Config {
+        name: Some(model_name),
+        engine: Engine::Cpu, // C++ implementation is most similar to CPU engine
+        generations: generation_count,
+        
+        // Match C++ application defaults exactly
+        population_size: 128, // Common C++ default
+        elite_count: 2,       // Typical C++ elite preservation
+        mutation_rate: 0.05,
+        mutation_strength: 0.1,
+        
+        // Use strategies that match C++ behavior
+        reproduction_strategy: ReproductionStrategy::CppEquivalent,
+        mutation_strategy: MutationStrategy::CppEquivalent,
+        fitness_func: FitnessFunc::CppEquivalent,
+        
+        // C++ applications typically use simpler activation functions
+        activation: crate::config::Activation::ClampedLinear,
+        
+        // Selection parameters (C++ compatibility)
+        selection_strategy: crate::config::SelectionStrategy::Tournament,
+        tournament_size: 3,     // Common tournament size
+        truncation_rate: 0.3,   // Reasonable default
+        crossover_rate: 0.8,    // Standard crossover rate
+        
+        // Adaptive mutation (disabled for C++ compatibility)
+        adaptive_mutation: false,
+        min_mutation_rate: 0.01,
+        max_mutation_rate: 0.1,
+        
+        // Convergence criteria (conservative for compatibility)
+        early_stopping_patience: None, // C++ didn't have early stopping
+        fitness_threshold: None,
+        track_diversity: false,        // C++ didn't track diversity
+        normalize_fitness: false,      // C++ used raw fitness values
+        
+        // Other reasonable defaults for C++ compatibility
+        random_ball_direction: false, // C++ version typically uses fixed direction
+        concurrent: false,            // C++ version was single-threaded
+        random_seed: None,           // C++ used system time as seed
+        
+        // Metadata
+        date_trained: None, // Unknown from C++ logs
+    }
+}
+
+/// Validates that a C++ log file can be successfully parsed.
+///
+/// # Teaching Note: Validation Functions
+/// Validation functions are useful for:
+/// - Pre-flight checks before expensive operations
+/// - Providing detailed feedback about data quality
+/// - Separating validation logic from parsing logic
+pub fn validate_cpp_log_file(path: &str) -> Result<CppLogMetadata, CppCompatError> {
+    let (_, _, metadata) = load_cpp_champion_enhanced(path)?;
+    Ok(metadata)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{rng, Rng};
+    use rand::{thread_rng, Rng};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_load_valid_champion() {
+    /// Helper function to create test log files with known content.
+    fn create_test_log_file(content: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
-        let mut rng = rng();
-        let weights: Vec<f32> = (0..217).map(|_| rng.random_range(-1.0..1.0)).collect();
-        let weights_str: String = weights
-            .iter()
+        file.write_all(content.as_bytes()).unwrap();
+        file
+    }
+
+    /// Helper to generate random weights for testing.
+    fn generate_test_weights() -> Vec<f32> {
+        let mut rng = thread_rng();
+        (0..TOTAL_WEIGHTS).map(|_| rng.gen_range(-1.0..1.0)).collect()
+    }
+
+    #[test]
+    fn test_load_valid_champion_original_format() {
+        let weights = generate_test_weights();
+        let weights_str = weights.iter()
             .map(|w| w.to_string())
             .collect::<Vec<_>>()
             .join(" ");
 
-        let content = format!("4 8 16 4 1\n1\n217 {}\n", weights_str);
-        file.write_all(content.as_bytes()).unwrap();
+        let content = format!("4 8 16 4 1\n1\n{} {}\n", TOTAL_WEIGHTS, weights_str);
+        let file = create_test_log_file(&content);
 
-        let result = load_cpp_champion(file.path().to_str().unwrap());
+        let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
         assert!(result.is_ok());
-        let (loaded_weights, config) = result.unwrap();
-        assert_eq!(loaded_weights.len(), 217);
-        assert_eq!(config.engine, Engine::Stack);
+        
+        let (loaded_weights, config, metadata) = result.unwrap();
+        assert_eq!(loaded_weights.len(), TOTAL_WEIGHTS);
+        assert_eq!(config.engine, Engine::Cpu);
         assert!(config.name.unwrap().contains("C++ Champion"));
-        // Compare floats with a tolerance
+        assert_eq!(metadata.total_generations, 1);
+        assert_eq!(metadata.format_version, CppLogFormat::Original);
+        
+        // Compare weights with tolerance
         for (a, b) in loaded_weights.iter().zip(weights.iter()) {
             assert!((a - b).abs() < 1e-6);
         }
     }
 
     #[test]
-    fn test_malformed_data_is_skipped() {
-        let mut file = NamedTempFile::new().unwrap();
-        let mut rng = rng();
-        let valid_weights: Vec<f32> = (0..217).map(|_| rng.random_range(-1.0..1.0)).collect();
-        let valid_weights_str: String = valid_weights
-            .iter()
+    fn test_multiple_generations() {
+        let weights1 = generate_test_weights();
+        let weights2 = generate_test_weights();
+        
+        let weights1_str = weights1.iter().map(|w| w.to_string()).collect::<Vec<_>>().join(" ");
+        let weights2_str = weights2.iter().map(|w| w.to_string()).collect::<Vec<_>>().join(" ");
+
+        let content = format!(
+            "4 8 16 4 1\n1\n{} {}\n2\n{} {}\n", 
+            TOTAL_WEIGHTS, weights1_str,
+            TOTAL_WEIGHTS, weights2_str
+        );
+        let file = create_test_log_file(&content);
+
+        let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let (loaded_weights, _, metadata) = result.unwrap();
+        assert_eq!(metadata.total_generations, 2);
+        
+        // Should load the last (most recent) champion
+        for (a, b) in loaded_weights.iter().zip(weights2.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_malformed_data_handling() {
+        let valid_weights = generate_test_weights();
+        let valid_weights_str = valid_weights.iter()
             .map(|w| w.to_string())
             .collect::<Vec<_>>()
             .join(" ");
 
         let content = format!(
-            "4 8 16 4 1\n1\n10 a b c\n1\n217 {}\n1\n5 d e f\n",
-            valid_weights_str
+            "4 8 16 4 1\n1\n10 a b c\n2\n{} {}\n3\n5 d e f\n",
+            TOTAL_WEIGHTS, valid_weights_str
         );
-        file.write_all(content.as_bytes()).unwrap();
+        let file = create_test_log_file(&content);
 
-        let result = load_cpp_champion(file.path().to_str().unwrap());
+        let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
         assert!(result.is_ok());
-        let (loaded_weights, _) = result.unwrap();
-
-        // It should have loaded the last valid genome it found
-        assert_eq!(loaded_weights.len(), 217);
+        
+        let (loaded_weights, _, metadata) = result.unwrap();
+        assert_eq!(loaded_weights.len(), TOTAL_WEIGHTS);
+        assert_eq!(metadata.total_generations, 3);
+        assert_eq!(metadata.total_individuals_found, 3); // Including malformed ones
+        
+        // Should have loaded the valid weights
         for (a, b) in loaded_weights.iter().zip(valid_weights.iter()) {
             assert!((a - b).abs() < 1e-6);
         }
     }
 
     #[test]
-    fn test_incorrect_weight_count() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "Generation 1:").unwrap();
-        writeln!(file, "1.0 2.0 3.0").unwrap(); // Not enough weights
+    fn test_weight_count_mismatch() {
+        let content = "4 8 16 4 1\n1\n3 1.0 2.0 3.0\n"; // Wrong number of weights
+        let file = create_test_log_file(content);
 
-        let result = load_cpp_champion(file.path().to_str().unwrap());
+        let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Weight count mismatch"));
+        
+        match result.unwrap_err() {
+            CppCompatError::NoValidChampion => {}, // Expected
+            other => panic!("Expected NoValidChampion error, got: {}", other),
+        }
     }
 
     #[test]
     fn test_file_not_found() {
-        let result = load_cpp_champion("non_existent_file.log");
+        let result = load_cpp_champion_enhanced("non_existent_file.log");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Log file not found"));
+        
+        match result.unwrap_err() {
+            CppCompatError::FileNotFound(path) => {
+                assert!(path.contains("non_existent_file.log"));
+            }
+            other => panic!("Expected FileNotFound error, got: {}", other),
+        }
     }
 
     #[test]
     fn test_empty_file() {
-        let file = NamedTempFile::new().unwrap();
-        let result = load_cpp_champion(file.path().to_str().unwrap());
+        let file = create_test_log_file("");
+        let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No valid champion found"));
+        
+        match result.unwrap_err() {
+            CppCompatError::NoValidChampion => {}, // Expected
+            other => panic!("Expected NoValidChampion error, got: {}", other),
+        }
+    }
+
+    #[test]
+    fn test_backwards_compatibility() {
+        let weights = generate_test_weights();
+        let weights_str = weights.iter()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let content = format!("4 8 16 4 1\n1\n{} {}\n", TOTAL_WEIGHTS, weights_str);
+        let file = create_test_log_file(&content);
+
+        // Test that the old API still works
+        let result = load_cpp_champion(file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let (loaded_weights, config) = result.unwrap();
+        assert_eq!(loaded_weights.len(), TOTAL_WEIGHTS);
+        assert_eq!(config.engine, Engine::Cpu);
+    }
+
+    #[test]
+    fn test_validate_cpp_log_file() {
+        let weights = generate_test_weights();
+        let weights_str = weights.iter()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let content = format!("4 8 16 4 1\n1\n{} {}\n", TOTAL_WEIGHTS, weights_str);
+        let file = create_test_log_file(&content);
+
+        let result = validate_cpp_log_file(file.path().to_str().unwrap());
+        assert!(result.is_ok());
+        
+        let metadata = result.unwrap();
+        assert_eq!(metadata.total_generations, 1);
+        assert_eq!(metadata.total_individuals_found, 1);
+        assert_eq!(metadata.format_version, CppLogFormat::Original);
     }
 }

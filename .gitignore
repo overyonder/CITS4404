@@ -35,6 +35,7 @@ fittest.log
 
 # Rust Build artifacts
 **/target/
+**/models/
 **/*.rs.bk
 **/*.rs.old
 **/*.rs.new

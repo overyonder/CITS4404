@@ -11,7 +11,7 @@ mod utils;
 use crate::traits::Individual;
 use crate::{
     config::{Activation, Config, Engine, FitnessFunc, MutationStrategy},
-    engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
+    engines::{GpuIndividual, StackIndividual},
     population::Population,
     tui::ui::run_app,
 };
@@ -124,9 +124,7 @@ fn main() -> io::Result<()> {
 fn run_cli(args: Args) {
     println!("--- RUNNING IN CLI MODE ---"); // Debug print
     let engine = match args.engine.as_str() {
-        "stack" => Engine::Stack,
-        "simd" => Engine::Simd,
-        "heap" => Engine::Heap,
+        "cpu" => Engine::Cpu,
         "gpu" => Engine::Gpu,
         other => {
             error!("Unknown engine: {}. Exiting.", other);
@@ -198,9 +196,7 @@ fn run_cli(args: Args) {
 
     // We use the macro to generate type-specific code for each engine, avoiding dyn Trait.
     match config.engine {
-        Engine::Stack => run_evolution!(StackIndividual, config, args),
-        Engine::Heap => run_evolution!(HeapIndividual, config, args),
-        Engine::Simd => run_evolution!(SimdIndividual, config, args),
+        Engine::Cpu => run_evolution!(StackIndividual, config, args),
         Engine::Gpu => run_evolution!(GpuIndividual, config, args),
     };
 
@@ -219,7 +215,9 @@ fn run_simulation_from_file(path: &str) -> Result<(), Box<dyn std::error::Error>
     info!(" Activation: {}", config.activation);
     info!("---------------------------");
 
-    let individual = HeapIndividual { weights };
+    let individual = StackIndividual { 
+        weights: weights.try_into().expect("Invalid weights array size")
+    };
     run_game_simulation(&individual, &config);
 
     Ok(())

@@ -1,55 +1,70 @@
 //! Handles the loading of trained models from files.
+//!
+//! # Teaching Note: Separation of Concerns
+//! This module is responsible solely for model persistence, demonstrating the
+//! **Single Responsibility Principle**. It's engine-agnostic, meaning the same
+//! loading logic works regardless of whether the model will be used with CPU,
+//! GPU, or other neural network backends.
 
 use crate::config::Config;
 use crate::constants::TOTAL_WEIGHTS;
-use bytemuck;
-use std::io::Read;
+use crate::traits::SerializableIndividual;
+use std::path::Path;
 
-/// Loads a model from a binary file, returning its weights and configuration.
+/// Loads a model from a JSON file, returning its weights and configuration.
 ///
-/// This function is engine-agnostic. It reads the metadata and raw weights,
-/// allowing the caller to decide which neural network engine to instantiate.
+/// # JSON Format (Human-Readable Model Storage)
+/// ```json
+/// {
+///   "weights": [0.1, -0.5, 0.3, ...],
+///   "config": {
+///     "population_size": 128,
+///     "mutation_rate": 0.05,
+///     "activation": "Tanh",
+///     "date_trained": "2024-01-15T10:30:00Z",
+///     ...
+///   }
+/// }
+/// ```
 ///
-/// # File Format
-/// 1. `u64` (little-endian): Length of the JSON config string.
-/// 2. `[u8]`: The UTF-8 encoded JSON config string.
-/// 3. `[f32]`: The raw `f32` weights.
+/// # Teaching Note: Model Persistence Design
+/// This function separates model data from model behavior, following good software
+/// architecture principles. The returned weights can be used to instantiate any
+/// Individual type, while the config preserves the training hyperparameters for
+/// reproducibility - a crucial aspect of scientific research.
+///
+/// # Error Handling Strategy
+/// Uses Rust's `Result` type for robust error handling, providing detailed error
+/// messages that help with debugging corrupted or incompatible model files.
 ///
 /// # Returns
-/// A `Result` containing a tuple of the `(weights, config)`,
-/// or an error if reading or deserialization fails.
+/// A `Result` containing a tuple of `(weights, config)`, or a descriptive error
+/// if loading or deserialization fails.
 pub fn load_model_from_file(
-    path: &std::path::Path,
+    path: &Path,
 ) -> Result<(Vec<f32>, Config), Box<dyn std::error::Error>> {
-    let mut file = std::fs::File::open(path)?;
+    // Read the entire JSON file into memory
+    let json_content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read model file '{}': {}", path.display(), e))?;
 
-    // 1. Read config length
-    let mut config_len_bytes = [0u8; 8];
-    file.read_exact(&mut config_len_bytes)?;
-    let config_len = u64::from_le_bytes(config_len_bytes);
+    // Deserialize the JSON into our structured format
+    let serializable: SerializableIndividual = serde_json::from_str(&json_content)
+        .map_err(|e| format!("Failed to parse JSON in '{}': {}", path.display(), e))?;
 
-    // 2. Read and deserialize config
-    let mut config_bytes = vec![0u8; config_len as usize];
-    file.read_exact(&mut config_bytes)?;
-    let config: Config = serde_json::from_slice(&config_bytes)?;
-
-    // 3. Read weights
-    let mut weights_bytes = Vec::new();
-    file.read_to_end(&mut weights_bytes)?;
-
-    if weights_bytes.len() != TOTAL_WEIGHTS * std::mem::size_of::<f32>() {
+    // Validate that the weights array has the expected size
+    // This catches models trained with different network architectures
+    if serializable.weights.len() != TOTAL_WEIGHTS {
         return Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "Weight data size mismatch in file '{}'. Expected {} bytes, but found {}. File may be corrupt or from an incompatible version.",
+                "Weight count mismatch in file '{}'. Expected {} weights, but found {}. \
+                 This model may have been trained with a different network architecture.",
                 path.display(),
-                TOTAL_WEIGHTS * std::mem::size_of::<f32>(),
-                weights_bytes.len()
+                TOTAL_WEIGHTS,
+                serializable.weights.len()
             ),
         )));
     }
 
-    let weights: Vec<f32> = bytemuck::cast_slice(&weights_bytes).to_vec();
-
-    Ok((weights, config))
+    Ok((serializable.weights, serializable.config))
 }

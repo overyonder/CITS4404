@@ -2,15 +2,15 @@
 use crate::{
     config::Config,
     constants::PADDLE_MAX_VEL,
-    engines::HeapIndividual, // Using HeapIndividual as a concrete type for the simulation brain
+    engines::StackIndividual, // Using StackIndividual as a concrete type for the simulation brain
     gamestate::GameState,
     traits::Individual,
 };
 
 /// Holds the state for a single simulation match.
 pub struct SimulationState {
-    pub left_player: HeapIndividual,
-    pub right_player: HeapIndividual,
+    pub left_player: StackIndividual,
+    pub right_player: StackIndividual,
     pub left_config: Config,
     pub right_config: Config,
     pub game_state: GameState,
@@ -25,11 +25,11 @@ impl SimulationState {
         right_config: Config,
     ) -> Self {
         Self {
-            left_player: HeapIndividual {
-                weights: left_weights,
+            left_player: StackIndividual {
+                weights: left_weights.try_into().expect("Invalid weights array size"),
             },
-            right_player: HeapIndividual {
-                weights: right_weights,
+            right_player: StackIndividual {
+                weights: right_weights.try_into().expect("Invalid weights array size"),
             },
             left_config,
             right_config,
