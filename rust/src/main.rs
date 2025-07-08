@@ -17,7 +17,7 @@ use crate::{
 };
 use clap::Parser;
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::path::Path;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -207,59 +207,38 @@ fn run_cli(args: Args) {
     info!("Evolution finished.");
 }
 
-/// Loads an individual from a file and runs a single game simulation.
+/// Loads an individual from a file and runs a single game simulation in the console.
 fn run_simulation_from_file(path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut file = std::fs::File::open(path)?;
+    info!("Loading model from: {}", path);
+    let (weights, config) = tui::model_loader::load_model_from_file(Path::new(path))?;
 
-    // Read the configuration metadata first to determine the engine.
-    let mut config_len_bytes = [0u8; 8];
-    file.read_exact(&mut config_len_bytes)?;
-    let config_len = u64::from_le_bytes(config_len_bytes);
+    info!("--- Starting Simulation ---");
+    info!(" Model: {}", config.name.as_deref().unwrap_or("N/A"));
+    info!(" Engine: {}", config.engine);
+    info!(" Generations: {}", config.generations);
+    info!(" Activation: {}", config.activation);
+    info!("---------------------------");
 
-    let mut config_bytes = vec![0u8; config_len as usize];
-    file.read_exact(&mut config_bytes)?;
-    let config: Config = serde_json::from_slice(&config_bytes)?;
-
-    info!("Loaded model trained with engine: {}", config.engine);
-    info!("Configuration: {:#?}", &config);
-
-    // This macro reduces duplication for loading and running a simulation.
-    // It ensures the correct, statically-typed `load` function is called.
-    macro_rules! load_and_simulate {
-        ($individual_type:ty, $path:expr) => {{
-            // The file path is passed to `load`, which will re-open and read it.
-            // This is simpler than trying to manage the file handle across functions.
-            let (individual, config) = <$individual_type>::load($path)?;
-            run_game_simulation(&individual, &config);
-        }};
-    }
-
-    // Dispatch to the correct loader based on the engine specified in the loaded config.
-    match config.engine {
-        Engine::Stack => load_and_simulate!(StackIndividual, path),
-        Engine::Heap => load_and_simulate!(HeapIndividual, path),
-        Engine::Simd => load_and_simulate!(SimdIndividual, path),
-        Engine::Gpu => load_and_simulate!(GpuIndividual, path),
-    }
+    let individual = HeapIndividual { weights };
+    run_game_simulation(&individual, &config);
 
     Ok(())
 }
 
-/// Runs a single game between a loaded individual and a default opponent of the same type.
+/// Runs a single game simulation between two instances of the same individual.
 fn run_game_simulation<I: Individual>(individual: &I, config: &Config) {
-    info!("\nRunning simulation...");
-    // Create a default opponent of the *same type* as the loaded individual.
-    // This is required because the `simulate` function expects both individuals to be the same type.
-    let opponent = I::default();
     let mut game_state = gamestate::GameState::new();
+    let ((left_primary, _), (right_primary, _)) =
+        game_state.simulate(individual, individual, config);
 
-    // The simulate function runs a game until MAX_SCORE is reached and returns the fitness scores.
-    game_state.simulate(individual, &opponent, config);
-    let (p1_score, p2_score) = game_state.scores;
-
-    info!("Simulation Finished!");
+    info!("--- Simulation Finished ---");
+    info!("Final Score: {} - {}", game_state.scores.0, game_state.scores.1);
     info!(
-        "Final Score: Trained Model {} - {} Random Opponent",
-        p1_score, p2_score
+        "Left Player Fitness (Returns+Shots): {}",
+        left_primary
+    );
+    info!(
+        "Right Player Fitness (Returns+Shots): {}",
+        right_primary
     );
 }

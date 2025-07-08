@@ -7,6 +7,7 @@ use crate::{
         simulation::SimulationState,
         training::{MatchupState, TrainingMessage},
     },
+    traits::Individual,
 };
 use crossterm::event::{self, Event, KeyEventKind};
 use ratatui::{backend::CrosstermBackend, layout::Alignment, widgets::Paragraph, Frame, Terminal};
@@ -63,6 +64,32 @@ fn handle_events(app: &mut App) -> Result<()> {
                         }
                         TrainingMessage::Finished => {
                             ts.running = false;
+                            // Save the best genome when training is finished.
+                            if let Some(genome) = &app.best_genome {
+                                // The GPUIndividual has a lifetime parameter, which makes it
+                                // difficult to use in the `save` function signature directly
+                                // with the other `Individual` types. We can work around this
+                                // by creating a temporary `StackIndividual` from the weights,
+                                // as the `save` implementation is identical for all CPU-based
+                                // engines.
+                                if let Ok(weights_array) = genome.clone().try_into() {
+                                    let temp_individual = crate::engines::StackIndividual {
+                                        weights: weights_array,
+                                    };
+                                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                                    let filename = format!("models/{}_champion.bin", timestamp);
+                                    if let Err(e) = temp_individual.save(&filename, &app.config) {
+                                        app.error_message =
+                                            Some(format!("Failed to save champion: {}", e));
+                                    }
+                                } else {
+                                    app.error_message = Some(format!(
+                                        "Genome size mismatch. Expected {}, found {}.",
+                                        crate::constants::TOTAL_WEIGHTS,
+                                        genome.len()
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -74,13 +101,13 @@ fn handle_events(app: &mut App) -> Result<()> {
             }
         }
         AppState::LoadCppChampion => match cpp_compat::load_cpp_champion("fittest.log") {
-            Ok(weights) => {
+            Ok((weights, config)) => {
                 app.best_genome = Some(weights.clone());
                 app.simulation = Some(SimulationState::new(
                     weights.clone(),
                     weights,
-                    "C++ Champion".to_string(),
-                    "C++ Champion".to_string(),
+                    config.clone(),
+                    config,
                 ));
                 app.state = AppState::Simulation;
                 app.error_message = None;

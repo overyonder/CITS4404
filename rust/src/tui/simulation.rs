@@ -7,53 +7,56 @@ use crate::{
     traits::Individual,
 };
 
+/// Holds the state for a single simulation match.
 pub struct SimulationState {
-    pub game: GameState,
-    p1_brain: HeapIndividual,
-    p2_brain: HeapIndividual,
-    pub p1_model_name: String,
-    pub p2_model_name: String,
+    pub left_player: HeapIndividual,
+    pub right_player: HeapIndividual,
+    pub left_config: Config,
+    pub right_config: Config,
+    pub game_state: GameState,
 }
 
 impl SimulationState {
-    /// Creates a new simulation state from two trained genomes.
-    pub fn new(p1_genome: Vec<f32>, p2_genome: Vec<f32>, p1_name: String, p2_name: String) -> Self {
-        let p1_brain = HeapIndividual {
-            weights: p1_genome,
-        };
-        let p2_brain = HeapIndividual {
-            weights: p2_genome,
-        };
-
+    /// Creates a new simulation with two specified individuals (by their weights).
+    pub fn new(
+        left_weights: Vec<f32>,
+        right_weights: Vec<f32>,
+        left_config: Config,
+        right_config: Config,
+    ) -> Self {
         Self {
-            game: GameState::new(),
-            p1_brain,
-            p2_brain,
-            p1_model_name: p1_name,
-            p2_model_name: p2_name,
+            left_player: HeapIndividual {
+                weights: left_weights,
+            },
+            right_player: HeapIndividual {
+                weights: right_weights,
+            },
+            left_config,
+            right_config,
+            game_state: GameState::new(),
         }
     }
 
-    /// Advance the simulation by one tick/frame, using the neural network to control the paddles.
+    /// Advances the simulation by one tick.
     pub fn step(&mut self, config: &Config) {
         // Get inputs for both players from the current game state.
-        let p1_inputs = self.game.get_inputs_for_player1();
-        let p2_inputs = self.game.get_inputs_for_player2();
+        let p1_inputs = self.game_state.get_inputs_for_player1();
+        let p2_inputs = self.game_state.get_inputs_for_player2();
 
         // Get actions from the neural networks.
         let p1_outputs = self
-            .p1_brain
+            .left_player
             .forward_propagate(&p1_inputs, config.activation);
         let p2_outputs = self
-            .p2_brain
+            .right_player
             .forward_propagate(&p2_inputs, config.activation);
 
         // Update paddle velocities based on network outputs.
         // The output is in the range [-1, 1], which we scale by the max paddle velocity constant.
-        self.game.paddle1_vel = p1_outputs[0] * PADDLE_MAX_VEL;
-        self.game.paddle2_vel = p2_outputs[0] * PADDLE_MAX_VEL;
+        self.game_state.paddle1_vel = p1_outputs[0] * PADDLE_MAX_VEL;
+        self.game_state.paddle2_vel = p2_outputs[0] * PADDLE_MAX_VEL;
 
         // Advance the game state by one frame.
-        self.game.advance_frame();
+        self.game_state.advance_frame();
     }
 }

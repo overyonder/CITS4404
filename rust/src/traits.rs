@@ -42,17 +42,15 @@ pub trait Individual: Default + Clone + Send + Sync {
     /// fine-grained mix of traits. Other strategies, like single-point or two-point
     /// crossover, are also common but uniform crossover is simple and often effective.
     fn crossover<R: Rng>(&self, other: &Self, rng: &mut R) -> Self {
-        let mut child = Self::default();
-        let parent1_weights = self.weights_as_slice();
+        let mut child = self.clone();
         let parent2_weights = other.weights_as_slice();
         let child_weights = child.weights_as_mut_slice();
 
         for i in 0..TOTAL_WEIGHTS {
-            child_weights[i] = if rng.random() {
-                parent1_weights[i]
-            } else {
-                parent2_weights[i]
-            };
+            // 50% chance to take a given weight from the second parent
+            if rng.random::<bool>() {
+                child_weights[i] = parent2_weights[i];
+            }
         }
         child
     }
@@ -98,24 +96,6 @@ pub trait Individual: Default + Clone + Send + Sync {
 
     /// Provides a mutable view of the individual's weights.
     fn weights_as_mut_slice(&mut self) -> &mut [f32];
-
-    /// Loads an individual and its configuration from a binary file.
-    ///
-    /// # Returns
-    /// A `Result` containing a tuple of the loaded `Individual` and its `Config`,
-    /// or an error if loading fails.
-    ///
-    /// # Teaching Note
-    /// This associated function (like a static method) is responsible for deserialization.
-    /// It reads the metadata header first, then the raw weight data, and constructs a new
-    /// individual. This is an example of the **Factory Pattern**. Each engine must provide
-    /// its own implementation because the way weights are stored internally (e.g., a stack
-    /// array vs. a heap vector) differs. The function returns a `Box<dyn std::error::Error>`
-    /// to gracefully handle different potential failure modes, like file-not-found I/O
-    // errors or malformed JSON parsing errors.
-    fn load(path: &str) -> Result<(Self, Config), Box<dyn std::error::Error>>
-    where
-        Self: Sized;
 
     /// Saves the individual's weights and configuration to a binary file.
     ///

@@ -1,9 +1,12 @@
 //! The main menu component.
 
-use crate::tui::{
-    app::{App, AppState, SimulationSetupState},
-    model_loader,
-    simulation::SimulationState,
+use crate::{
+    config::Config,
+    tui::{
+        app::{App, AppState, ModelInfo, SimulationSetupState},
+        model_loader,
+        simulation::SimulationState,
+    },
 };
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -12,7 +15,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem},
     Frame,
 };
-use std::path::Path;
+use std::{fs, io, path::Path};
 
 /// State for the main menu.
 pub struct MainMenu {
@@ -59,11 +62,15 @@ pub fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
                     1 => {
                         // "Simulate Last Champion"
                         if let Some(genome) = app.best_genome.clone() {
+                            // Create a default config for the in-memory champion
+                            let mut champion_config = Config::default();
+                            champion_config.name = Some("Last Trained Champion".to_string());
+
                             app.simulation = Some(SimulationState::new(
                                 genome.clone(),
                                 genome,
-                                "Trained Champion".to_string(),
-                                "Trained Champion".to_string(),
+                                champion_config.clone(),
+                                champion_config,
                             ));
                             app.state = AppState::Simulation;
                         } else {
@@ -73,7 +80,7 @@ pub fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
                     }
                     2 => {
                         // "Simulate from File"
-                        match model_loader::load_models_from_dir(Path::new("models")) {
+                        match load_models_from_dir(Path::new("models")) {
                             Ok(models) => {
                                 if models.is_empty() {
                                     app.error_message = Some(
@@ -105,6 +112,28 @@ pub fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
         }
         _ => {}
     }
+}
+
+/// Scans the 'models' directory and loads the metadata for each valid model file.
+fn load_models_from_dir(dir: &Path) -> io::Result<Vec<ModelInfo>> {
+    let mut models = Vec::new();
+    if !dir.exists() {
+        fs::create_dir_all(dir)?;
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Ok((_weights, mut config)) = model_loader::load_model_from_file(&path) {
+                // If the model name isn't in the config, use the filename.
+                if config.name.is_none() {
+                    config.name = path.file_stem().map(|s| s.to_string_lossy().to_string());
+                }
+                models.push(ModelInfo { path, config });
+            }
+        }
+    }
+    Ok(models)
 }
 
 /// Draws the UI for the main menu.

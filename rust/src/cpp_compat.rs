@@ -1,14 +1,18 @@
 //! C++ compatibility layer for loading trained models.
 
-use crate::constants::TOTAL_WEIGHTS;
+use crate::{
+    config::{Config, Engine, FitnessFunc, MutationStrategy, ReproductionStrategy},
+    constants::TOTAL_WEIGHTS,
+};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
 /// Loads the weights of the fittest individual from a C++ `fittest.log` file.
 ///
-/// The function reads the entire log file to find the last generation's data
-/// and returns the weights of the first individual listed in that generation.
-pub fn load_cpp_champion(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+/// The function reads the entire log file to find the last generation's data,
+/// returns the weights of the first individual listed, and fabricates a `Config`
+/// struct to make it compatible with the Rust simulation UI.
+pub fn load_cpp_champion(path: &str) -> Result<(Vec<f32>, Config), Box<dyn std::error::Error>> {
     // Check if the file exists first, to provide a clearer error message.
     if !std::path::Path::new(path).exists() {
         return Err(format!("Log file not found at: {}", path).into());
@@ -23,10 +27,14 @@ pub fn load_cpp_champion(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Err
 
     let mut last_champion_weights: Vec<f32> = Vec::new();
 
-    let file_lines: Vec<String> = lines.collect::<Result<_,_>>()?;
+    let file_lines: Vec<String> = lines.collect::<Result<_, _>>()?;
 
-    // Find the last generation
-    if let Some(last_line_with_weights) = file_lines.iter().rev().find(|l| !l.trim().is_empty() && l.split_whitespace().count() > 1) {
+    // Find the last line with weights
+    if let Some(last_line_with_weights) = file_lines
+        .iter()
+        .rev()
+        .find(|l| !l.trim().is_empty() && l.split_whitespace().count() > 1)
+    {
         let weights: Vec<f32> = last_line_with_weights
             .split_whitespace()
             .skip(1) // The first element is the number of weights, so we skip it.
@@ -48,7 +56,16 @@ pub fn load_cpp_champion(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Err
     if last_champion_weights.is_empty() {
         Err("No valid champion found in the log file.".into())
     } else {
-        Ok(last_champion_weights)
+        // Fabricate a config for the C++ model for UI display purposes.
+        let cpp_config = Config {
+            name: Some("C++ Champion (from fittest.log)".to_string()),
+            engine: Engine::Stack, // C++ is most similar to the Stack engine
+            reproduction_strategy: ReproductionStrategy::CppEquivalent,
+            mutation_strategy: MutationStrategy::CppEquivalent,
+            fitness_func: FitnessFunc::CppEquivalent,
+            ..Default::default()
+        };
+        Ok((last_champion_weights, cpp_config))
     }
 }
 
@@ -75,8 +92,10 @@ mod tests {
 
         let result = load_cpp_champion(file.path().to_str().unwrap());
         assert!(result.is_ok());
-        let loaded_weights = result.unwrap();
+        let (loaded_weights, config) = result.unwrap();
         assert_eq!(loaded_weights.len(), 217);
+        assert_eq!(config.engine, Engine::Stack);
+        assert!(config.name.unwrap().contains("C++ Champion"));
         // Compare floats with a tolerance
         for (a, b) in loaded_weights.iter().zip(weights.iter()) {
             assert!((a - b).abs() < 1e-6);
@@ -102,9 +121,9 @@ mod tests {
 
         let result = load_cpp_champion(file.path().to_str().unwrap());
         assert!(result.is_ok());
-        let loaded_weights = result.unwrap();
+        let (loaded_weights, _) = result.unwrap();
 
-        // It should have loaded the first valid genome it found
+        // It should have loaded the last valid genome it found
         assert_eq!(loaded_weights.len(), 217);
         for (a, b) in loaded_weights.iter().zip(valid_weights.iter()) {
             assert!((a - b).abs() < 1e-6);

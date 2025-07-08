@@ -1,7 +1,5 @@
 use crate::{config::Activation, constants::*, traits::Individual, utils};
-use bytemuck;
 use rand::Rng;
-use std::io::Read;
 
 /// A neural network individual whose weights are stored in a heap-allocated `Vec<f32>`.
 ///
@@ -96,60 +94,5 @@ impl Individual for HeapIndividual {
 
     fn weights_as_mut_slice(&mut self) -> &mut [f32] {
         &mut self.weights
-    }
-
-    /// Loads a `HeapIndividual` and its configuration from a file.
-    ///
-    /// # File Format
-    /// The function expects the file to be in the format created by the `save` method:
-    /// 1. `u64` (little-endian): Length of the JSON config string.
-    /// 2. `[u8]`: The UTF-8 encoded JSON config string.
-    /// 3. `[f32]`: The raw `f32` weights, which are read into a new heap-allocated `Vec<f32>`.
-    ///
-    /// # Returns
-    /// A `Result` containing a tuple of the loaded `HeapIndividual` and its `Config`,
-    /// or an error if reading or deserialization fails.
-    ///
-    /// # Teaching Note: Deserialization to the Heap
-    /// The process is similar to the `StackIndividual`, but with a key difference. After
-    /// `bytemuck::cast_slice` provides a temporary, zero-copy view of the bytes as `&[f32]`,
-    /// `.to_vec()` is called. This performs a new heap allocation and copies the weight
-    /// data into it, creating the `Vec<f32>` that the `HeapIndividual` owns.
-    fn load(path: &str) -> Result<(Self, crate::config::Config), Box<dyn std::error::Error>>
-    where
-        Self: Sized,
-    {
-        let mut file = std::fs::File::open(path)?;
-
-        // 1. Read config length
-        let mut config_len_bytes = [0u8; 8];
-        file.read_exact(&mut config_len_bytes)?;
-        let config_len = u64::from_le_bytes(config_len_bytes);
-
-        // 2. Read and deserialize config
-        let mut config_bytes = vec![0u8; config_len as usize];
-        file.read_exact(&mut config_bytes)?;
-        let config: crate::config::Config = serde_json::from_slice(&config_bytes)?;
-
-        // 3. Read weights
-        let mut weights_bytes = Vec::new();
-        file.read_to_end(&mut weights_bytes)?;
-
-        if weights_bytes.len() != TOTAL_WEIGHTS * std::mem::size_of::<f32>() {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Expected {} weight bytes, but found {}",
-                    TOTAL_WEIGHTS * std::mem::size_of::<f32>(),
-                    weights_bytes.len()
-                ),
-            )));
-        }
-
-        let weights: Vec<f32> = bytemuck::cast_slice(&weights_bytes).to_vec();
-
-        let individual = Self { weights };
-
-        Ok((individual, config))
     }
 }

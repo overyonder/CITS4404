@@ -28,11 +28,29 @@ pub fn handle_training_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Tab => {
             app.next_tab();
         }
+        KeyCode::Enter => {
+            if let Some(ts) = &app.training {
+                if !ts.running {
+                    app.state = AppState::MainMenu;
+                    app.training = None;
+                    app.tx = None;
+                    app.rx = None;
+                }
+            }
+        }
         _ => {}
     }
 }
 
 pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
+    // Check for finished state first to avoid borrow checker issues.
+    if let Some(training_state) = &app.training {
+        if !training_state.running {
+            draw_finished_popup(f, area);
+            return;
+        }
+    }
+
     if let Some(training_state) = &mut app.training {
         // Create a two-column layout
         let chunks = Layout::default()
@@ -199,21 +217,57 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
         draw_info_panel(f, app, sidebar_chunks[3]);
 
         // Log Panel
-        let log_widget: TuiLoggerWidget = TuiLoggerWidget::default()
+        let log_widget = TuiLoggerWidget::default()
             .block(
                 Block::default()
                     .title("Log")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded),
             )
-            .style_error(Style::default().fg(Color::Red))
-            .style_debug(Style::default().fg(Color::Green))
+            .style_info(Style::default().fg(Color::Blue))
             .style_warn(Style::default().fg(Color::Yellow))
-            .style_trace(Style::default().fg(Color::Magenta))
-            .style_info(Style::default().fg(Color::Cyan))
-            .output_separator(' ');
+            .style_error(Style::default().fg(Color::Red));
         f.render_widget(log_widget, sidebar_chunks[4]);
     }
+}
+
+fn draw_finished_popup(f: &mut Frame, area: Rect) {
+    let popup_text = "Training Finished!\n\nPress 'Enter' to return to the main menu.";
+    let block = Block::default()
+        .title("Status")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Green));
+
+    let text = Paragraph::new(popup_text)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    // Center the popup in the middle of the screen
+    let popup_area = centered_rect(50, 20, area);
+    f.render_widget(ratatui::widgets::Clear, popup_area); // Clear the area behind the popup
+    f.render_widget(text, popup_area);
+}
+
+/// Helper to create a centered rectangle for popups.
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 /// Draws the content for the "Generations" tab.

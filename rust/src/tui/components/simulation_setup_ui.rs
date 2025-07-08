@@ -34,28 +34,15 @@ pub fn handle_simulation_setup_input(app: &mut App, key_code: KeyCode) {
                         let right_model_info = &setup_state.models[right_index];
 
                         match (
-                            model_loader::load_weights_from_file(&left_model_info.path),
-                            model_loader::load_weights_from_file(&right_model_info.path),
+                            model_loader::load_model_from_file(&left_model_info.path),
+                            model_loader::load_model_from_file(&right_model_info.path),
                         ) {
-                            (Ok(left_weights), Ok(right_weights)) => {
-                                let left_name = left_model_info
-                                    .path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-                                let right_name = right_model_info
-                                    .path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string();
-
+                            (Ok((left_weights, left_config)), Ok((right_weights, right_config))) => {
                                 app.simulation = Some(SimulationState::new(
                                     left_weights,
                                     right_weights,
-                                    left_name,
-                                    right_name,
+                                    left_config,
+                                    right_config,
                                 ));
                                 app.state = AppState::Simulation;
                                 app.simulation_setup = None; // Clean up

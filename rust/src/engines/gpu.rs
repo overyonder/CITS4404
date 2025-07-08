@@ -257,13 +257,13 @@ impl Individual for GpuIndividual<'_> {
     /// bulk transfer of the updated data to the corresponding GPU buffer, ensuring the two
     /// copies remain synchronized.
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
-        let mut weights = self.get_weights_from_gpu();
-        for i in 0..weights.len() {
+        // Mutate the CPU-side cache directly for performance.
+        for i in 0..self.weights.len() {
             if rng.random::<f32>() < config.mutation_rate {
-                weights[i] += rng.random_range(-1.0..=1.0) * config.mutation_strength;
+                self.weights[i] += rng.random_range(-1.0..=1.0) * config.mutation_strength;
             }
         }
-        self.weights = weights;
+        // Sync the entire updated weight vector to the GPU in one go.
         self.sync_weights_to_gpu();
     }
 
@@ -277,35 +277,6 @@ impl Individual for GpuIndividual<'_> {
         // trait's default `mutate` implementation does not do this, which is why `GpuIndividual`
         // provides its own `mutate` implementation that correctly handles synchronization.
         &mut self.weights
-    }
-
-    /// Loads a `GpuIndividual` and its configuration from a file.
-    ///
-    /// # File Format
-    /// The function expects the file to be in the format created by the `save` method:
-    /// 1. `u64` (little-endian): Length of the JSON config string.
-    /// 2. `[u8]`: The UTF-8 encoded JSON config string.
-    /// 3. `[f32]`: The raw `f32` weights.
-    ///
-    /// # Implementation
-    /// The weights are first loaded into a heap-allocated `Vec<f32>` on the CPU.
-    /// Then, the `from_weights` constructor is used to create the `GpuIndividual`,
-    /// which handles creating a `wgpu::Buffer` and copying the weights to the GPU.
-    ///
-    /// # Returns
-    /// A `Result` containing a tuple of the loaded `GpuIndividual` and its `Config`,
-    /// or an error if reading or deserialization fails.
-    ///
-    /// # Teaching Note
-    /// This function demonstrates how to load data for a GPU-based resource. The raw bytes are
-    /// first loaded into a standard `Vec<f32>` on the CPU. Then, the `from_weights` constructor
-    /// is called, which encapsulates the logic of creating a new GPU buffer and queueing a
-    /// command to copy the host-side data to the device.
-    fn load(_path: &str) -> Result<(Self, Config), Box<dyn std::error::Error>>
-    where
-        Self: Sized,
-    {
-        unimplemented!("Loading GPU individuals is not yet supported directly in this manner.");
     }
 }
 

@@ -91,6 +91,9 @@ impl fmt::Display for FitnessFunc {
 /// or through the CLI parser.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// A user-friendly name for the model, often the filename.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The neural network engine to use.
     pub engine: Engine,
     /// The activation function for hidden and output layers.
@@ -137,6 +140,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            name: None,
             generations: 100,
             mutation_rate: 0.05,      // C++ default: 5% chance to mutate a gene
             mutation_strength: 0.1, // C++ default: Mutate by up to +/- 10%

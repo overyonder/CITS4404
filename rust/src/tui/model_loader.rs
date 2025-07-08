@@ -1,73 +1,55 @@
-//! Logic for discovering and loading simulation models from the filesystem.
+//! Handles the loading of trained models from files.
 
 use crate::config::Config;
-use crate::tui::app::ModelInfo;
-use std::fs;
-use std::io::{self, Read, Seek, SeekFrom};
-use std::path::Path;
+use crate::constants::TOTAL_WEIGHTS;
+use bytemuck;
+use std::io::Read;
 
-/// Scans a directory for model files and parses their metadata.
+/// Loads a model from a binary file, returning its weights and configuration.
 ///
-/// This function iterates through all files in the given directory, attempts to
-/// parse the `Config` metadata from the header of each file, and returns a
-/// vector of `ModelInfo` structs for valid models.
-pub fn load_models_from_dir(dir: &Path) -> io::Result<Vec<ModelInfo>> {
-    let mut models = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            if let Ok(config) = load_config_from_file(&path) {
-                models.push(ModelInfo {
-                    path,
-                    config,
-                });
-            }
-        }
-    }
-    Ok(models)
-}
-
-/// Reads the `Config` from the header of a saved model file.
+/// This function is engine-agnostic. It reads the metadata and raw weights,
+/// allowing the caller to decide which neural network engine to instantiate.
 ///
-/// The model file is expected to be structured with a `u64` length prefix
-/// for the JSON config, followed by the JSON data itself.
-fn load_config_from_file(path: &Path) -> io::Result<Config> {
-    let mut file = fs::File::open(path)?;
+/// # File Format
+/// 1. `u64` (little-endian): Length of the JSON config string.
+/// 2. `[u8]`: The UTF-8 encoded JSON config string.
+/// 3. `[f32]`: The raw `f32` weights.
+///
+/// # Returns
+/// A `Result` containing a tuple of the `(weights, config)`,
+/// or an error if reading or deserialization fails.
+pub fn load_model_from_file(
+    path: &std::path::Path,
+) -> Result<(Vec<f32>, Config), Box<dyn std::error::Error>> {
+    let mut file = std::fs::File::open(path)?;
 
-    // 1. Read the length of the config JSON
-    let mut len_bytes = [0u8; 8];
-    file.read_exact(&mut len_bytes)?;
-    let len = u64::from_le_bytes(len_bytes);
+    // 1. Read config length
+    let mut config_len_bytes = [0u8; 8];
+    file.read_exact(&mut config_len_bytes)?;
+    let config_len = u64::from_le_bytes(config_len_bytes);
 
-    // 2. Read the config JSON and deserialize it
-    let mut config_bytes = vec![0; len as usize];
+    // 2. Read and deserialize config
+    let mut config_bytes = vec![0u8; config_len as usize];
     file.read_exact(&mut config_bytes)?;
-    let config: Config = serde_json::from_slice(&config_bytes)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let config: Config = serde_json::from_slice(&config_bytes)?;
 
-    Ok(config)
-}
-
-/// Loads the raw f32 weights from a saved model file, skipping the config header.
-pub fn load_weights_from_file(path: &Path) -> io::Result<Vec<f32>> {
-    let mut file = fs::File::open(path)?;
-
-    // 1. Read the length of the config JSON and skip it
-    let mut len_bytes = [0u8; 8];
-    file.read_exact(&mut len_bytes)?;
-    let len = u64::from_le_bytes(len_bytes);
-    file.seek(SeekFrom::Current(len as i64))?;
-
-    // 2. Read the rest of the file for the weights
+    // 3. Read weights
     let mut weights_bytes = Vec::new();
     file.read_to_end(&mut weights_bytes)?;
 
-    // 3. Convert bytes to Vec<f32>
-    let weights: Vec<f32> = weights_bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-        .collect();
+    if weights_bytes.len() != TOTAL_WEIGHTS * std::mem::size_of::<f32>() {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Weight data size mismatch in file '{}'. Expected {} bytes, but found {}. File may be corrupt or from an incompatible version.",
+                path.display(),
+                TOTAL_WEIGHTS * std::mem::size_of::<f32>(),
+                weights_bytes.len()
+            ),
+        )));
+    }
 
-    Ok(weights)
+    let weights: Vec<f32> = bytemuck::cast_slice(&weights_bytes).to_vec();
+
+    Ok((weights, config))
 }

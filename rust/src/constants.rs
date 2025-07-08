@@ -50,9 +50,6 @@ pub const BALL_INITIAL_VEL_X: f32 = WIDTH as f32 / TICK_RATE as f32;
 /// The initial y-velocity of the ball in pixels per tick.
 pub const BALL_INITIAL_VEL_Y: f32 = WIDTH as f32 / TICK_RATE as f32;
 
-/// The radius of the ball in pixels.
-pub const BALL_RADIUS: f32 = 2.5;
-
 // ----------------------------------------------------------------------------
 // Neural Network Architecture
 // ----------------------------------------------------------------------------
