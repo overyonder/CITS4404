@@ -19,18 +19,20 @@
 //! - **Genetic operators**: Crossover combines solutions, mutation introduces novelty
 //! - **Multi-objective optimization**: Primary/secondary fitness for complex objectives
 //! - **Parallel evaluation**: Concurrent fitness assessment for performance
+//! - **GPU Acceleration**: Mass parallel evaluation using compute shaders
 
 use crate::{
     config::Config,
     gamestate::GameState,
     traits::Individual,
     tui::training::TrainingMessage,
+    engines::gpu::GpuBatchEngine,
 };
 use rand::{prelude::*, rng};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 /// Represents a population of individuals (neural networks) for evolutionary training.
 ///
@@ -39,6 +41,7 @@ use tracing::{debug, info, trace};
 /// - **Genotypes**: The actual individuals (neural network weights)
 /// - **Phenotypes**: Fitness scores derived from individual performance
 /// - **Parameters**: Configuration controlling evolutionary behavior
+/// - **GPU Resources**: Batch processing engine for mass parallelization
 ///
 /// # Multi-objective Fitness Encoding
 /// Fitness scores use a packed `u64` format:
@@ -70,6 +73,10 @@ pub struct Population<I: Individual> {
     /// Evolutionary algorithm configuration parameters
     /// Controls selection pressure, mutation rates, reproduction strategies, etc.
     pub config: Config,
+    
+    /// GPU batch processing engine for mass parallel evaluation
+    /// Only initialized when GPU engine is selected
+    gpu_batch_engine: Option<GpuBatchEngine>,
 }
 
 impl<I: Individual> Population<I> {
@@ -80,15 +87,52 @@ impl<I: Individual> Population<I> {
     /// - **Random initialization**: Explores full search space, no bias
     /// - **Diverse initialization**: Ensures genetic variety from start
     /// - **Population size**: Balance between diversity and computational cost
+    /// - **GPU Preparation**: Initialize GPU resources if using GPU engine
     ///
     /// The `Individual::default()` creates random weights, providing
     /// **uniform random initialization** across the weight space.
     pub fn new(config: Config) -> Self {
         let pop_size = config.population_size;
+        debug!("Creating population with size: {}", pop_size);
+        
+        // Initialize GPU batch engine if using GPU
+        let gpu_batch_engine = if matches!(config.engine, crate::config::Engine::Gpu) {
+            debug!("Initializing GPU batch engine...");
+            match GpuBatchEngine::new(pop_size * 2) { // 2x for safety margin
+                Ok(engine) => {
+                    info!("GPU batch engine initialized for population size {}", pop_size);
+                    Some(engine)
+                }
+                Err(e) => {
+                    warn!("Failed to initialize GPU batch engine: {}. Falling back to CPU evaluation.", e);
+                    warn!("GPU functionality is not available. Using CPU fallback mode.");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        
+        debug!("Creating {} individuals...", pop_size);
+        let individuals: Vec<I> = (0..pop_size)
+            .enumerate()
+            .map(|(i, _)| {
+                if i % 10 == 0 { debug!("Created {} individuals", i); }
+                I::default()
+            })
+            .collect();
+        debug!("All {} individuals created", pop_size);
+        
+        debug!("Creating fitness vector...");
+        let fitness: Vec<AtomicU64> = (0..pop_size).map(|_| AtomicU64::new(0)).collect();
+        debug!("Fitness vector created");
+        
+        debug!("Population creation complete");
         Self {
-            individuals: (0..pop_size).map(|_| I::default()).collect(),
-            fitness: (0..pop_size).map(|_| AtomicU64::new(0)).collect(),
+            individuals,
+            fitness,
             config,
+            gpu_batch_engine,
         }
     }
 
@@ -217,6 +261,106 @@ impl<I: Individual> Population<I> {
             });
         }
         trace!("Concurrent full tournament finished.");
+    }
+
+    /// Batch GPU fitness evaluation with fallback to CPU.
+    ///
+    /// # Teaching Note: GPU Computing with Graceful Degradation
+    /// This function demonstrates production-ready GPU computing patterns:
+    /// - **Primary GPU path**: Attempt high-performance GPU evaluation first
+    /// - **Automatic fallback**: Fall back to CPU if GPU fails for any reason
+    /// - **Error handling**: Graceful degradation ensures training always progresses
+    /// - **Performance monitoring**: Track success/failure for optimization insights
+    ///
+    /// This pattern is essential in production ML systems where hardware varies
+    /// and training must complete reliably regardless of available resources.
+    pub fn evaluate_fitness_gpu_batch(&mut self, tx: &Option<mpsc::Sender<TrainingMessage>>) {
+        trace!("Checking GPU batch engine availability...");
+        
+        // Check if GPU batch engine is available
+        if self.gpu_batch_engine.is_none() {
+            debug!("GPU batch engine not available, falling back to CPU evaluation");
+            if self.config.concurrent {
+                self.evaluate_fitness_concurrent(tx);
+            } else {
+                self.evaluate_fitness(tx);
+            }
+            return;
+        }
+        
+        trace!("Resetting fitness scores for GPU batch evaluation.");
+        for fitness in self.fitness.iter() {
+            fitness.store(0, Ordering::Relaxed);
+        }
+
+        let pop_size = self.config.population_size;
+        trace!("Starting GPU batch evaluation for {} individuals.", pop_size);
+
+        // Calculate tournament size before borrowing
+        let tournament_size = self.calculate_optimal_tournament_size();
+        
+        // Try GPU batch evaluation
+        if let Some(batch_engine) = &mut self.gpu_batch_engine {
+            match batch_engine.evaluate_population(&self.individuals, &self.config, tournament_size) {
+                Ok(fitness_values) => {
+                    // Success: update fitness scores from GPU results
+                    for (i, &fitness_value) in fitness_values.iter().enumerate() {
+                        if i < self.fitness.len() {
+                            // Convert single fitness value to packed format (primary = fitness, secondary = 0)
+                            let packed_fitness = ((fitness_value as u32 as u64) << 32) | 0u64;
+                            self.fitness[i].store(packed_fitness, Ordering::Relaxed);
+                        }
+                    }
+                    trace!("GPU batch evaluation completed successfully.");
+                }
+                Err(e) => {
+                    warn!("GPU batch evaluation failed: {}. Falling back to CPU evaluation.", e);
+                    // Fallback to CPU evaluation
+                    if self.config.concurrent {
+                        self.evaluate_fitness_concurrent(tx);
+                    } else {
+                        self.evaluate_fitness(tx);
+                    }
+                }
+            }
+        } else {
+            // This shouldn't happen, but handle it gracefully
+            warn!("GPU batch engine unexpectedly unavailable, using CPU fallback");
+            if self.config.concurrent {
+                self.evaluate_fitness_concurrent(tx);
+            } else {
+                self.evaluate_fitness(tx);
+            }
+        }
+    }
+
+    /// Calculates optimal tournament size for GPU workgroup efficiency.
+    ///
+    /// # Teaching Note: GPU Performance Optimization
+    /// Tournament size affects GPU performance characteristics:
+    /// - **Small tournaments**: More parallelism, less work per thread
+    /// - **Large tournaments**: Less parallelism, more work per thread
+    /// - **Optimal size**: Balance between parallelism and workgroup efficiency
+    ///
+    /// # Algorithm:
+    /// Aims for GPU workgroup sizes that are multiples of warp/wavefront size (32/64)
+    /// while ensuring sufficient work per thread for good GPU utilization.
+    fn calculate_optimal_tournament_size(&self) -> usize {
+        let population_size = self.individuals.len();
+        
+        // Target workgroup sizes that are efficient on most GPUs
+        let target_workgroup_sizes = [64, 128, 256];
+        
+        // Find the largest tournament size that provides good parallelism
+        for &workgroup_size in target_workgroup_sizes.iter().rev() {
+            let tournament_size = population_size / workgroup_size;
+            if tournament_size >= 4 && tournament_size <= 16 {
+                return tournament_size;
+            }
+        }
+        
+        // Default fallback tournament size
+        std::cmp::min(8, std::cmp::max(4, population_size / 32))
     }
 
     /// Selects elite individuals and returns their indices sorted by fitness.
@@ -484,7 +628,10 @@ impl<I: Individual> Population<I> {
             // Phase 1: Fitness Evaluation
             // All individuals compete to determine their relative performance
             trace!("Evaluating fitness...");
-            if self.config.concurrent {
+            let use_gpu = matches!(self.config.engine, crate::config::Engine::Gpu);
+            if use_gpu {
+                self.evaluate_fitness_gpu_batch(&tx);
+            } else if self.config.concurrent {
                 self.evaluate_fitness_concurrent(&tx);
             } else {
                 self.evaluate_fitness(&tx);
@@ -569,13 +716,10 @@ impl<I: Individual> Population<I> {
             let progress_message = TrainingMessage::Progress {
                 generation: (gen + 1) as usize,
                 best_fitness: best_fitness as f32,
-                avg_fitness: average_fitness,
-                worst_fitness: worst_fitness as f32,
                 genome_weights: best_individual.weights_as_slice().to_vec(),
                 total_matches_simulated,
                 training_rate,
                 improvement_rate,
-                max_possible_score: MAX_POSSIBLE_SCORE,
             };
 
             if let Some(tx) = &tx {

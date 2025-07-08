@@ -48,14 +48,14 @@ fn handle_events(app: &mut App) -> Result<()> {
                             total_matches_simulated,
                             training_rate,
                             improvement_rate,
-                            max_possible_score: _,
-                            ..
                         } => {
                             ts.current_generation = generation;
                             ts.fitness_history.push(best_fitness);
                             ts.total_matches_simulated = total_matches_simulated;
                             ts.training_rate_history.push(training_rate);
-                            ts.improvement_rate_history.push(improvement_rate);
+                            
+                            // Use the new sampling method for improvement rate averaging
+                            ts.add_improvement_rate_sample(improvement_rate);
                             
                             // Only update champion genome if this is a new all-time best
                             if best_fitness > ts.best_fitness {
@@ -76,7 +76,7 @@ fn handle_events(app: &mut App) -> Result<()> {
                                     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
                                     let filename = format!("models/{}_champion.json", timestamp);
 
-                                    // Clone the config, and set the name before saving.
+                                    // Clone the config, and update with actual training results
                                     let mut config_to_save = app.config.clone();
                                     config_to_save.name = Some(
                                         Path::new(&filename)
@@ -85,6 +85,8 @@ fn handle_events(app: &mut App) -> Result<()> {
                                             .to_string_lossy()
                                             .to_string(),
                                     );
+                                    // Update with actual generations completed (normal completion)
+                                    config_to_save.generations = ts.current_generation as u32;
 
                                     if let Err(e) = temp_individual.save(&filename, &config_to_save)
                                     {
@@ -110,42 +112,12 @@ fn handle_events(app: &mut App) -> Result<()> {
                                 ts.best_fitness = best_fitness;
                             }
                             
-                            // Save the best genome when training stops early.
-                            if let Some(genome) = &app.best_genome {
-                                if let Ok(weights_array) = genome.clone().try_into() {
-                                    let temp_individual = crate::engines::StackIndividual {
-                                        weights: weights_array,
-                                    };
-
-                                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                                    let filename = format!("models/{}_champion_early_stop.json", timestamp);
-
-                                    // Clone the config, and set the name before saving.
-                                    let mut config_to_save = app.config.clone();
-                                    config_to_save.name = Some(
-                                        Path::new(&filename)
-                                            .file_stem()
-                                            .unwrap()
-                                            .to_string_lossy()
-                                            .to_string(),
-                                    );
-
-                                    if let Err(e) = temp_individual.save(&filename, &config_to_save)
-                                    {
-                                        app.error_message =
-                                            Some(format!("Failed to save champion: {}", e));
-                                    } else {
-                                        app.success_message =
-                                            Some(format!("Champion saved to {} (stopped early at gen {})", filename, final_generation));
-                                    }
-                                } else {
-                                    app.error_message = Some(format!(
-                                        "Genome size mismatch. Expected {}, found {}.",
-                                        crate::constants::TOTAL_WEIGHTS,
-                                        genome.len()
-                                    ));
-                                }
-                            }
+                            // Note: Champion genome is automatically saved during progress updates
+                            // when a new best fitness is achieved, so no additional saving needed here.
+                            app.success_message = Some(format!(
+                                "Training stopped early at generation {} (fitness: {:.2})", 
+                                final_generation, best_fitness
+                            ));
                         }
                     }
                 }

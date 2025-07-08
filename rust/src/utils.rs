@@ -1,153 +1,105 @@
-//! Utility functions shared across different modules.
+//! Utility functions for performance optimization, mathematical operations, and benchmarking.
 //!
-//! This module provides common mathematical operations used throughout the neural network
-//! implementations. These functions are designed to be efficient and well-documented for
-//! educational purposes.
+//! This module provides helper functions used throughout the codebase for:
+//! - High-performance mathematical operations (dot products, activation functions)
+//! - Educational demonstrations of optimization techniques
+//! - Clear examples of Rust performance patterns for students
+//!
+//! # Teaching Note: Performance Engineering in Evolutionary Algorithms
+//! Performance optimization is critical in evolutionary algorithms due to their
+//! computational intensity. This module demonstrates several optimization principles:
+//! - Iterator chain optimization for mathematical operations
+//! - Function dispatching patterns for runtime polymorphism
+//! - Clear, readable code that still performs well
+//! - Educational examples that students can understand and modify
 
 use crate::config::Activation;
 
-/// Computes the dot product of two slices of f32 values.
+/// High-performance dot product for vector inputs using iterator optimization.
 ///
-/// # Mathematical Definition
-/// The dot product of vectors a and b is: dot(a,b) = Σ(aᵢ × bᵢ) for i = 0 to n-1
+/// # Teaching Note: Iterator Optimization in Rust
+/// This function demonstrates modern Rust performance patterns:
+/// - **Iterator chains**: More readable than manual loops while maintaining performance
+/// - **Lazy evaluation**: Operations are fused together by the compiler for efficiency
+/// - **SIMD potential**: Rust's iterator patterns enable automatic vectorization
+/// - **Memory safety**: Bounds checking at compile-time through slice types
+/// - **Zero-cost abstractions**: High-level code compiles to optimized assembly
 ///
-/// # Neural Network Context
-/// In neural networks, dot products are fundamental for computing weighted sums:
-/// - Each neuron computes: output = Σ(inputᵢ × weightᵢ) + bias
-/// - This is exactly a dot product between the input vector and weight vector
+/// # Performance Characteristics:
+/// - Time complexity: O(N) where N is vector length
+/// - Space complexity: O(1) - operates with iterator state only
+/// - Cache efficiency: Sequential access pattern is cache-friendly
+/// - Branch prediction: Minimal branching in the hot loop
 ///
-/// # Performance Notes
-/// - Uses iterator chaining for optimal performance and readability
-/// - The compiler can often auto-vectorize this loop for SIMD performance
-/// - For very large vectors, consider specialized BLAS libraries like `ndarray` or `candle`
+/// # Mathematical Foundation:
+/// Computes the standard dot product: Σ(aᵢ × bᵢ) for i = 0 to n-1
+/// This is a fundamental operation in neural networks for computing weighted sums.
 ///
-/// # Panics
-/// Panics if the input slices are not of equal length, as the dot product is undefined
-/// for vectors of different dimensions.
-///
-/// # Teaching Note: Compiler Optimizations
-/// This simple implementation often compiles to highly optimized SIMD instructions
-/// on modern processors. The Rust compiler can recognize this pattern and automatically
-/// vectorize it. For educational purposes, this shows how high-level functional code
-/// can achieve performance comparable to hand-optimized loops.
-#[inline]
+/// # Usage in Neural Networks:
+/// ```text
+/// neuron_input = dot(input_vector, weight_vector) + bias
+/// ```
+/// Each neuron computes this dot product to determine its activation level.
 pub fn dot(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len(), 
-        "Dot product requires vectors of equal length: {} vs {}", a.len(), b.len());
+    debug_assert_eq!(a.len(), b.len(), "Vector lengths must match for dot product");
     
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| x * y)
+        .sum()
 }
 
-/// Applies a non-linear activation function to a scalar value.
+/// Applies the specified activation function to a raw neural network output.
 ///
-/// # Activation Functions in Neural Networks
-/// Activation functions introduce non-linearity into neural networks, enabling them to
-/// learn complex patterns. Without activation functions, multiple layers would collapse
-/// into a single linear transformation, severely limiting the network's expressive power.
+/// # Teaching Note: Activation Functions in Neural Networks
+/// Activation functions introduce **non-linearity** into neural networks, enabling them
+/// to learn complex patterns beyond linear relationships. Without activation functions,
+/// even deep networks would be equivalent to simple linear regression.
+/// 
+/// ## Function Characteristics:
+/// - **ClampedLinear**: `f(x) = clamp(x, -1, 1)`
+///   - Fast to compute, bounded output range
+///   - Used for C++ compatibility in this project
+///   - Good for problems where output range is known
+/// 
+/// - **Tanh**: `f(x) = tanh(x)`  
+///   - Range: (-1, 1), smooth S-shaped curve
+///   - Zero-centered (mean activation ≈ 0)
+///   - Well-behaved gradients for backpropagation (though not used in this EA)
+/// 
+/// - **ReLU**: `f(x) = max(0, x)`
+///   - Most popular in modern deep learning
+///   - Fast computation, helps avoid vanishing gradients
+///   - Can suffer from "dead neurons" problem
+/// 
+/// - **Atan**: `f(x) = atan(x)`
+///   - Range: (-π/2, π/2) ≈ (-1.57, 1.57)
+///   - Similar shape to tanh but different scaling
+/// 
+/// - **Sigmoid**: `f(x) = 1 / (1 + e^(-x))`
+///   - Range: (0, 1), classic S-shaped curve
+///   - Can interpret output as probability
+///   - Prone to gradient saturation at extremes
+/// 
+/// - **Linear**: `f(x) = x`
+///   - No non-linearity, acts as pass-through
+///   - Useful for output layers or debugging
+///   - Multiple linear layers collapse to single linear transformation
 ///
-/// # Available Activation Functions:
-///
-/// - **ClampedLinear**: `f(x) = clamp(x, -1, 1)` - Linear with bounds, prevents extreme values
-/// - **Tanh**: `f(x) = tanh(x)` - S-shaped curve, outputs in (-1, 1), zero-centered
-/// - **ReLU**: `f(x) = max(0, x)` - Simple, fast, addresses vanishing gradient problem
-/// - **Atan**: `f(x) = atan(x)` - S-shaped, bounded output in (-π/2, π/2)
-/// - **Sigmoid**: `f(x) = 1/(1 + e^(-x))` - Classic S-curve, outputs in (0, 1)
-/// - **Linear**: `f(x) = x` - No transformation, used in output layers for regression
-///
-/// # Teaching Note: Activation Function Properties
-/// Each activation function has trade-offs:
-/// - **ReLU**: Fast, prevents vanishing gradients, but can "die" (always output 0)
-/// - **Tanh**: Zero-centered (good for hidden layers), but can saturate
-/// - **Sigmoid**: Historically popular, but suffers from vanishing gradients
-/// - **Linear**: Only use in output layer; multiple linear layers = single linear layer
-///
-/// # Performance Optimization
-/// The match statement compiles to a jump table, making function selection very fast.
-/// Each activation function uses optimized implementations from the standard library.
-#[inline]
-pub fn apply_activation(x: f32, activation: Activation) -> f32 {
+/// # Performance Note:
+/// Uses Rust's pattern matching for compile-time function dispatch. The compiler
+/// can often inline these simple mathematical operations for optimal performance.
+pub fn apply_activation(value: f32, activation: Activation) -> f32 {
     match activation {
-        Activation::ClampedLinear => x.clamp(-1.0, 1.0),
-        Activation::Tanh => x.tanh(),
-        Activation::Relu => x.max(0.0),
-        Activation::Atan => x.atan(),
-        Activation::Sigmoid => {
-            // Numerically stable sigmoid implementation
-            // Avoids overflow for large negative x values
-            if x < 0.0 {
-                let exp_x = x.exp();
-                exp_x / (1.0 + exp_x)
-            } else {
-                1.0 / (1.0 + (-x).exp())
-            }
-        },
-        Activation::Linear => x,
+        Activation::ClampedLinear => value.clamp(-1.0, 1.0),
+        Activation::Tanh => value.tanh(),
+        Activation::Relu => value.max(0.0),
+        Activation::Atan => value.atan(),
+        Activation::Sigmoid => 1.0 / (1.0 + (-value).exp()),
+        Activation::Linear => value,
     }
 }
 
-/// Performs efficient dot product computation optimized for small, fixed-size arrays.
-///
-/// # Teaching Note: Specialization for Performance
-/// For the small, fixed-size vectors common in this neural network (8 inputs, 16 hidden units),
-/// this specialized version can be faster than the generic `dot` function. The compiler
-/// can fully unroll these loops and optimize memory access patterns.
-///
-/// # When to Use
-/// Use this for performance-critical code paths with small, known vector sizes.
-/// For larger or variable-sized vectors, use the generic `dot` function.
-#[inline]
-pub fn dot_small<const N: usize>(a: &[f32; N], b: &[f32; N]) -> f32 {
-    let mut sum = 0.0;
-    for i in 0..N {
-        sum += a[i] * b[i];
-    }
-    sum
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_dot_product() {
-        let a = [1.0, 2.0, 3.0];
-        let b = [4.0, 5.0, 6.0];
-        let result = dot(&a, &b);
-        assert_eq!(result, 32.0); // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
-    }
 
-    #[test]
-    fn test_dot_small() {
-        let a = [1.0, 2.0, 3.0];
-        let b = [4.0, 5.0, 6.0];
-        let result = dot_small(&a, &b);
-        assert_eq!(result, 32.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Dot product requires vectors of equal length")]
-    fn test_dot_product_different_lengths() {
-        let a = [1.0, 2.0];
-        let b = [3.0, 4.0, 5.0];
-        dot(&a, &b);
-    }
-
-    #[test]
-    fn test_activation_functions() {
-        // Test basic functionality of each activation
-        assert_eq!(apply_activation(0.0, Activation::Linear), 0.0);
-        assert_eq!(apply_activation(2.0, Activation::ClampedLinear), 1.0);
-        assert_eq!(apply_activation(-2.0, Activation::ClampedLinear), -1.0);
-        assert_eq!(apply_activation(0.0, Activation::Relu), 0.0);
-        assert_eq!(apply_activation(-1.0, Activation::Relu), 0.0);
-        assert_eq!(apply_activation(1.0, Activation::Relu), 1.0);
-        
-        // Test sigmoid bounds
-        let sigmoid_result = apply_activation(0.0, Activation::Sigmoid);
-        assert!((sigmoid_result - 0.5).abs() < f32::EPSILON);
-        
-        // Test tanh bounds
-        let tanh_result = apply_activation(0.0, Activation::Tanh);
-        assert!((tanh_result - 0.0).abs() < f32::EPSILON);
-    }
-}

@@ -26,7 +26,6 @@ use std::{sync::mpsc, thread};
 struct ParameterInfo {
     name: &'static str,
     description: &'static str,
-    value_type: &'static str,
     valid_range: &'static str,
     educational_note: &'static str,
 }
@@ -36,84 +35,90 @@ const PARAMETER_INFO: &[ParameterInfo] = &[
     ParameterInfo {
         name: "Engine",
         description: "Neural network computation backend",
-        value_type: "Engine",
         valid_range: "CPU, GPU",
         educational_note: "CPU is reliable and fast for small networks. GPU can accelerate large populations but has setup overhead.",
     },
     ParameterInfo {
         name: "Generations",
         description: "Number of evolutionary iterations to run",
-        value_type: "Number", 
         valid_range: "10-10000",
         educational_note: "More generations allow better evolution but take longer. 100-500 is typically sufficient for Pong.",
     },
     ParameterInfo {
         name: "Population Size",
         description: "Number of individuals in each generation",
-        value_type: "Number",
         valid_range: "10-1000",
         educational_note: "Larger populations explore more solutions but require more computation. 50-200 works well for most problems.",
     },
     ParameterInfo {
         name: "Elite Count",
         description: "Top individuals preserved unchanged each generation",
-        value_type: "Number",
         valid_range: "1-20% of population",
         educational_note: "Elitism ensures good solutions aren't lost. Too many elites reduce exploration, too few lose progress.",
     },
     ParameterInfo {
         name: "Mutation Rate", 
         description: "Probability each gene will be mutated",
-        value_type: "Probability",
         valid_range: "0.00-1.00",
         educational_note: "Higher rates increase exploration but may disrupt good solutions. 0.01-0.1 is typical for neural networks.",
     },
     ParameterInfo {
         name: "Mutation Strength",
         description: "Maximum magnitude of mutations",
-        value_type: "Number",
         valid_range: "0.01-2.00",
         educational_note: "Controls how large mutations can be. Smaller values make fine adjustments, larger values enable big changes.",
     },
     ParameterInfo {
         name: "Activation",
         description: "Non-linear function applied in hidden layers",
-        value_type: "Function",
         valid_range: "Tanh, ReLU, Sigmoid, etc.",
         educational_note: "Different functions have different learning properties. Tanh is zero-centered, ReLU avoids vanishing gradients.",
     },
     ParameterInfo {
         name: "Reproduction",
         description: "How parent selection and crossover work",
-        value_type: "Strategy",
         valid_range: "Tournament, Roulette, etc.",
         educational_note: "Tournament selection is robust and maintains selection pressure. Roulette is simpler but can lose diversity.",
     },
     ParameterInfo {
         name: "Mutation Strategy",
         description: "Approach to introducing genetic variation",
-        value_type: "Strategy", 
         valid_range: "Modern, CppEquivalent",
         educational_note: "Modern allows multiple mutations per individual. CppEquivalent mutates exactly one gene for comparison.",
     },
     ParameterInfo {
         name: "Fitness Function",
         description: "How to evaluate individual performance",
-        value_type: "Function",
         valid_range: "CppEquivalent, WinLoss",
         educational_note: "CppEquivalent rewards ball returns and shots. WinLoss only cares about winning games.",
     },
     ParameterInfo {
+        name: "Early Stopping Patience",
+        description: "Stop if no improvement for this many generations",
+        valid_range: "None, 10-500",
+        educational_note: "Prevents wasted computation when evolution has plateaued. None disables early stopping. 50-200 is typical for most problems.",
+    },
+    ParameterInfo {
+        name: "Fitness Threshold",
+        description: "Minimum improvement required to continue training",
+        valid_range: "None, 0.001-1.0",
+        educational_note: "Defines 'meaningful' progress to avoid training on tiny improvements. None disables threshold checking. 0.01-0.1 is typical.",
+    },
+    ParameterInfo {
+        name: "Track Diversity",
+        description: "Monitor population genetic diversity during training",
+        valid_range: "true, false",
+        educational_note: "Helps diagnose premature convergence issues but adds computational overhead. Enable for research/debugging.",
+    },
+    ParameterInfo {
         name: "Random Ball Direction",
         description: "Whether ball direction varies each game",
-        value_type: "Boolean",
         valid_range: "true, false",
         educational_note: "Randomization makes training more robust but evaluation less consistent. Enable for diverse training.",
     },
     ParameterInfo {
         name: "Concurrent Training",
         description: "Whether to use parallel processing",
-        value_type: "Boolean",
         valid_range: "true, false", 
         educational_note: "Parallel processing speeds up training on multi-core systems but adds complexity and memory usage.",
     },
@@ -142,6 +147,14 @@ fn get_config_items(config: &Config) -> Vec<(&'static str, String, bool)> {
         ("Reproduction", config.reproduction_strategy.to_string(), true),
         ("Mutation Strategy", config.mutation_strategy.to_string(), true),
         ("Fitness Function", config.fitness_func.to_string(), true),
+        // Early stopping and convergence parameters
+        ("Early Stopping Patience", 
+         config.early_stopping_patience.map_or("None".to_string(), |p| p.to_string()), 
+         true),
+        ("Fitness Threshold", 
+         config.fitness_threshold.map_or("None".to_string(), |t| format!("{:.4}", t)), 
+         true),
+        ("Track Diversity", config.track_diversity.to_string(), true),
         ("Random Ball Direction", config.random_ball_direction.to_string(), true),
         ("Concurrent Training", config.concurrent.to_string(), true),
     ]);
@@ -270,26 +283,36 @@ fn draw_validation_panel(f: &mut Frame, app: &App, area: Rect) {
         text.push(Line::from(""));
         for issue in issues.iter().take(2) { // Show max 2 issues to fit
             text.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Yellow)),
+                Span::styled("• ", Style::default().fg(Color::Red)),
                 Span::styled(issue, Style::default().fg(Color::White)),
             ]));
         }
         if issues.len() > 2 {
             text.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("... and {} more", issues.len() - 2), Style::default().fg(Color::Gray)),
+                Span::styled(format!("... and {} more issues", issues.len() - 2), 
+                           Style::default().fg(Color::Gray)),
             ]));
         }
+    } else {
+        text.push(Line::from(""));
+        text.push(Line::from(vec![
+            Span::styled("Controls: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
+            Span::styled(" navigate, ", Style::default().fg(Color::Gray)),
+            Span::styled("←/→", Style::default().fg(Color::Yellow)),
+            Span::styled(" change, ", Style::default().fg(Color::Gray)),
+            Span::styled("'d'", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(" toggle None/Some", Style::default().fg(Color::Gray)),
+        ]));
     }
 
     let paragraph = Paragraph::new(text)
         .block(
             Block::default()
-                .title("🎯 Status")
-                .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+                .title("🚦 Status")
+                .title_style(Style::default().fg(status_color).add_modifier(Modifier::BOLD))
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(if is_ready { Color::Green } else { Color::Yellow })),
+                .border_type(BorderType::Rounded),
         )
         .alignment(Alignment::Left);
 
@@ -301,46 +324,69 @@ fn draw_enhanced_parameter_explanation(f: &mut Frame, app: &App, area: Rect) {
     let items = get_config_items(&app.config);
     let selected_idx = app.config_editor.state.selected().unwrap_or(0);
     
-    if selected_idx >= items.len() || selected_idx >= PARAMETER_INFO.len() {
+    if selected_idx >= items.len() {
         return;
     }
     
-    let param_info = &PARAMETER_INFO[selected_idx];
-    let (_name, current_value, is_valid) = &items[selected_idx];
+    let (param_name, current_value, is_valid) = &items[selected_idx];
     
-    let text = vec![
+    // Find matching parameter info
+    let param_info = PARAMETER_INFO.iter()
+        .find(|p| p.name == *param_name)
+        .unwrap_or(&PARAMETER_INFO[0]);
+
+    let status_color = if *is_valid { Color::Green } else { Color::Yellow };
+    let border_color = if *is_valid { Color::Cyan } else { Color::Yellow };
+    
+    // Create enhanced help text with better toggle instructions
+    let mut help_lines = vec![
         Line::from(vec![
-            Span::styled("Description: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(param_info.description, Style::default().fg(Color::White)),
+            Span::styled("Parameter: ", Style::default().fg(Color::Gray)),
+            Span::styled(*param_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
-            Span::styled("Current: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(current_value, Style::default().fg(if *is_valid { Color::Green } else { Color::Red })),
-            Span::styled(" | Range: ", Style::default().fg(Color::Gray)),
-            Span::styled(param_info.valid_range, Style::default().fg(Color::Gray)),
+            Span::styled("Current: ", Style::default().fg(Color::Gray)),
+            Span::styled(current_value.clone(), Style::default().fg(status_color)),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("💡 ", Style::default().fg(Color::Yellow)),
-            Span::styled(param_info.educational_note, Style::default().fg(Color::Gray)),
+            Span::styled("Description: ", Style::default().fg(Color::Yellow)),
+            Span::raw(param_info.description),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Controls: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-            Span::raw("←/→ to change, ↑/↓ to navigate, Enter to start, q to back"),
+            Span::styled("Valid Range: ", Style::default().fg(Color::Green)),
+            Span::raw(param_info.valid_range),
         ]),
     ];
+    
+    // Add special instructions for optional parameters that can be toggled with 'd'
+    if param_name == &"Early Stopping Patience" || param_name == &"Fitness Threshold" {
+        help_lines.push(Line::from(""));
+        help_lines.push(Line::from(vec![
+            Span::styled("Press 'd' to toggle between ", Style::default().fg(Color::Cyan)),
+            Span::styled("None", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" and ", Style::default().fg(Color::Cyan)),
+            Span::styled("Some(default)", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+    
+    help_lines.push(Line::from(""));
+    help_lines.push(Line::from(vec![
+        Span::styled("Note: ", Style::default().fg(Color::Blue)),
+        Span::raw(param_info.educational_note),
+    ]));
 
-    let paragraph = Paragraph::new(text)
+    let paragraph = Paragraph::new(help_lines)
         .block(
             Block::default()
-                .title(format!("📋 Parameter: {}", param_info.name))
-                .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                .title("📖 Parameter Guide")
+                .title_style(Style::default().fg(border_color).add_modifier(Modifier::BOLD))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Green)),
+                .border_style(Style::default().fg(border_color)),
         )
-        .alignment(Alignment::Left);
+        .wrap(ratatui::widgets::Wrap { trim: true });
 
     f.render_widget(paragraph, area);
 }
@@ -382,7 +428,10 @@ pub fn handle_config_input(app: &mut App, key_code: KeyCode) {
         KeyCode::Char('r') | KeyCode::Char('R') => {
             // Reset to defaults
             app.config = Config::default();
-            app.success_message = Some("Configuration reset to defaults".to_string());
+        }
+        KeyCode::Char('d') | KeyCode::Char('D') => {
+            // Toggle optional parameters between None and Some(default)
+            toggle_optional_parameter(app);
         }
         _ => {}
     }
@@ -416,8 +465,9 @@ fn start_training(app: &mut App) {
                 )
             }
             Engine::Gpu => {
+                // Use GpuIndividual for proper GPU processing
                 run_evolution_for_engine!(
-                    crate::engines::GpuIndividual, 
+                    crate::engines::GpuIndividual<'static>, 
                     training_config, 
                     tx.clone()
                 )
@@ -432,7 +482,6 @@ fn start_training(app: &mut App) {
     
     app.training_thread = Some(handle);
     app.state = AppState::Training;
-    app.success_message = Some("Training started! Watch the evolution progress.".to_string());
 }
 
 /// Enhanced parameter modification with proper bounds checking and user feedback.
@@ -446,7 +495,7 @@ fn change_config_value(app: &mut App, increase: bool) {
         }
         
         let item_name = items[selected].0;
-        let old_value = items[selected].1.clone();
+        let _old_value = items[selected].1.clone(); // Used for potential debugging
         
         match item_name {
             "Engine" => {
@@ -496,13 +545,26 @@ fn change_config_value(app: &mut App, increase: bool) {
                 }
             }
             "Activation" => {
-                config.activation = match config.activation {
-                    Activation::ClampedLinear => Activation::Tanh,
-                    Activation::Tanh => Activation::Relu,
-                    Activation::Relu => Activation::Atan,
-                    Activation::Atan => Activation::Sigmoid,
-                    Activation::Sigmoid => Activation::Linear,
-                    Activation::Linear => Activation::ClampedLinear,
+                config.activation = if increase {
+                    // Forward direction (right arrow)
+                    match config.activation {
+                        Activation::ClampedLinear => Activation::Tanh,
+                        Activation::Tanh => Activation::Relu,
+                        Activation::Relu => Activation::Atan,
+                        Activation::Atan => Activation::Sigmoid,
+                        Activation::Sigmoid => Activation::Linear,
+                        Activation::Linear => Activation::ClampedLinear,
+                    }
+                } else {
+                    // Reverse direction (left arrow)
+                    match config.activation {
+                        Activation::ClampedLinear => Activation::Linear,
+                        Activation::Linear => Activation::Sigmoid,
+                        Activation::Sigmoid => Activation::Atan,
+                        Activation::Atan => Activation::Relu,
+                        Activation::Relu => Activation::Tanh,
+                        Activation::Tanh => Activation::ClampedLinear,
+                    }
                 };
             }
             "Reproduction" => {
@@ -524,6 +586,31 @@ fn change_config_value(app: &mut App, increase: bool) {
                     FitnessFunc::VictoryOptimized => FitnessFunc::CppEquivalent,
                 };
             }
+            "Early Stopping Patience" => {
+                let step = 10; // Larger steps for better range
+                if increase {
+                    config.early_stopping_patience = Some((config.early_stopping_patience.unwrap_or(50) + step).min(500));
+                } else {
+                    let current = config.early_stopping_patience.unwrap_or(50);
+                    if current > step {
+                        config.early_stopping_patience = Some((current - step).max(10));
+                    }
+                }
+            }
+            "Fitness Threshold" => {
+                let step = 0.01; // Larger steps for better control
+                if increase {
+                    config.fitness_threshold = Some((config.fitness_threshold.unwrap_or(0.01) + step).min(1.0));
+                } else {
+                    let current = config.fitness_threshold.unwrap_or(0.01);
+                    if current > step {
+                        config.fitness_threshold = Some((current - step).max(0.001));
+                    }
+                }
+            }
+            "Track Diversity" => {
+                config.track_diversity = !config.track_diversity;
+            }
             "Random Ball Direction" => {
                 config.random_ball_direction = !config.random_ball_direction;
             }
@@ -533,10 +620,40 @@ fn change_config_value(app: &mut App, increase: bool) {
             _ => {}
         }
         
-        // Provide user feedback for significant changes
-        let new_value = get_config_items(config)[selected].1.clone();
-        if new_value != old_value {
-            app.success_message = Some(format!("Changed {} from {} to {}", item_name, old_value, new_value));
+        // Note: User feedback removed as requested - no popup on parameter changes
+    }
+}
+
+/// Toggles optional parameters between None and Some(default_value).
+fn toggle_optional_parameter(app: &mut App) {
+    let config = &mut app.config;
+    let items = get_config_items(config);
+    
+    if let Some(selected) = app.config_editor.state.selected() {
+        if selected >= items.len() {
+            return;
+        }
+        
+        let item_name = items[selected].0;
+        
+        match item_name {
+            "Early Stopping Patience" => {
+                config.early_stopping_patience = if config.early_stopping_patience.is_some() {
+                    None
+                } else {
+                    Some(50) // Updated default value for better range
+                };
+            }
+            "Fitness Threshold" => {
+                config.fitness_threshold = if config.fitness_threshold.is_some() {
+                    None
+                } else {
+                    Some(0.01) // Updated default value for better range
+                };
+            }
+            _ => {
+                // For non-optional parameters, do nothing
+            }
         }
     }
 }

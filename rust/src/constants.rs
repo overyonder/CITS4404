@@ -105,14 +105,7 @@ pub const BALL_INITIAL_VEL_X: f32 = WIDTH as f32 / TICK_RATE as f32; // ~6.67 px
 /// This ensures no inherent bias toward horizontal vs vertical strategies.
 pub const BALL_INITIAL_VEL_Y: f32 = WIDTH as f32 / TICK_RATE as f32; // ~6.67 px/tick
 
-/// The radius of the ball in pixels (used only for rendering, not physics).
-///
-/// # Teaching Note: Rendering vs Physics Separation
-/// The ball radius affects only visual representation. Physics calculations treat
-/// the ball as a point particle, with collision detection based on paddle edges.
-/// This separation follows the **single responsibility principle**: physics accuracy
-/// is independent of visual styling.
-pub const BALL_RADIUS: f32 = 5.0;
+
 
 // ----------------------------------------------------------------------------
 // Neural Network Architecture Constants
@@ -243,27 +236,4 @@ pub const L3_WEIGHTS: usize = OUTPUT_SIZE * (HIDDEN2_SIZE + 1); // 1 * 5 = 5
 /// - Very memory efficient for real-time evolution
 pub const TOTAL_WEIGHTS: usize = L1_WEIGHTS + L2_WEIGHTS + L3_WEIGHTS; // 217 total
 
-// ----------------------------------------------------------------------------
-// Derived Convenience Constants
-// ----------------------------------------------------------------------------
 
-/// The aspect ratio of the game field (width/height).
-/// Useful for scaling calculations and UI layout.
-pub const ASPECT_RATIO: f32 = WIDTH as f32 / HEIGHT as f32; // 4:3 ratio
-
-/// Maximum possible distance a ball can travel in one tick.
-/// Useful for collision detection and numerical stability checks.
-/// Calculated as sqrt(vx² + vy²) ≈ sqrt(6.67² + 6.67²) ≈ 9.43
-pub const MAX_BALL_SPEED: f32 = 9.43;
-
-/// Time (in ticks) for a ball to cross the field horizontally at initial speed.
-/// Useful for timeout detection and game pacing calculations.
-pub const FIELD_CROSSING_TIME: f32 = WIDTH as f32 / BALL_INITIAL_VEL_X;
-
-/// The paddle speed as a fraction of field height per second.
-/// Useful for understanding relative movement speeds.
-pub const PADDLE_SPEED_RATIO: f32 = PADDLE_MAX_VEL / HEIGHT as f32;
-
-/// Number of weights in each layer (for debugging and analysis).
-/// Useful for understanding parameter distribution across the network.
-pub const WEIGHTS_PER_LAYER: [usize; 3] = [L1_WEIGHTS, L2_WEIGHTS, L3_WEIGHTS];

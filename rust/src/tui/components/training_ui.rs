@@ -23,7 +23,7 @@ pub fn handle_training_input(app: &mut App, key_code: KeyCode) {
             if let Some(training_state) = &app.training {
                 let elapsed_time = training_state.start_time.elapsed().as_secs();
                 if elapsed_time > 30 && !training_state.genome_weights.is_empty() {
-                    save_champion_on_cancel(&training_state.genome_weights, &app.config);
+                                            save_champion_on_cancel(&training_state.genome_weights, &app.config, training_state.current_generation);
                 }
             }
             
@@ -47,7 +47,7 @@ pub fn handle_training_input(app: &mut App, key_code: KeyCode) {
 }
 
 /// Saves the champion genome when training is cancelled after 30+ seconds
-fn save_champion_on_cancel(genome_weights: &[f32], config: &crate::config::Config) {
+fn save_champion_on_cancel(genome_weights: &[f32], config: &crate::config::Config, actual_generations: usize) {
     use chrono::Utc;
     use std::fs;
     use std::path::Path;
@@ -65,10 +65,11 @@ fn save_champion_on_cancel(genome_weights: &[f32], config: &crate::config::Confi
         }
     }
     
-    // Create a config for saving with current timestamp
+    // Create a config for saving with current timestamp and actual generations
     let mut save_config = config.clone();
     save_config.name = Some(format!("Cancelled Training {}", timestamp));
     save_config.date_trained = Some(Utc::now());
+    save_config.generations = actual_generations as u32;
     
     // Save the genome using a simple JSON format
     let save_data = serde_json::json!({
@@ -188,87 +189,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 
 
-/// Draws the info panel with colorful badges for configuration parameters.
-fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .title("Configuration")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner_area = block.inner(area);
-    f.render_widget(block, area);
 
-    let (engine_str, is_concurrent) = {
-        let engine_name = app.config.engine.to_string();
-        if let Some(stripped) = engine_name.strip_prefix("concurrent-") {
-            (stripped.to_string(), true)
-        } else {
-            (engine_name, false)
-        }
-    };
-
-    let engine_color = match engine_str.as_str() {
-        "stack" => Color::Gray,
-        "heap" => Color::Red,
-        "simd" => Color::Blue,
-        "gpu" => Color::Magenta,
-        _ => Color::White,
-    };
-
-    let activation_color = match app.config.activation {
-        crate::config::Activation::ClampedLinear => Color::Rgb(128, 128, 128), // Gray
-        crate::config::Activation::Tanh => Color::Cyan,
-        crate::config::Activation::Relu => Color::Green,
-        crate::config::Activation::Atan => Color::Yellow,
-        crate::config::Activation::Linear => Color::White,
-        crate::config::Activation::Sigmoid => Color::Rgb(255, 165, 0), // Orange
-    };
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::raw("Engine: "),
-            Span::styled(
-                format!(" {} ", engine_str.to_uppercase()),
-                Style::default().bg(engine_color).fg(Color::Black),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("Activation: "),
-            Span::styled(
-                format!(" {} ", app.config.activation.to_string().to_uppercase()),
-                Style::default().bg(activation_color).fg(Color::Black),
-            ),
-        ]),
-        Line::from(format!("Fitness: {}", app.config.fitness_func)),
-        Line::from(format!("Population: {}", app.config.population_size)),
-        Line::from(format!("Generations: {}", app.config.generations)),
-        Line::from(format!("Concurrent: {}", app.config.concurrent)),
-        Line::from(format!("Elite Count: {}", app.config.elite_count)),
-        Line::from(format!("Reproduction: {}", app.config.reproduction_strategy)),
-        Line::from(format!("Mutation: {}", app.config.mutation_strategy)),
-    ];
-
-    // Only show mutation parameters when using Modern mutation strategy
-    if matches!(app.config.mutation_strategy, crate::config::MutationStrategy::Modern) {
-        lines.insert(lines.len() - 1, Line::from(format!("Mutation Rate: {:.3}", app.config.mutation_rate)));
-        lines.insert(lines.len() - 1, Line::from(format!("Mutation Str: {:.3}", app.config.mutation_strength)));
-    }
-
-    if is_concurrent {
-        lines.insert(
-            1,
-            Line::from(vec![
-                Span::raw("Mode: "),
-                Span::styled(
-                    " CONCURRENT ",
-                    Style::default().bg(Color::LightBlue).fg(Color::Black),
-                ),
-            ]),
-        );
-    }
-
-    let info_paragraph = Paragraph::new(lines).alignment(Alignment::Left);
-    f.render_widget(info_paragraph, inner_area);
-}
 
 fn draw_progress_section(f: &mut Frame, training_state: &TrainingState, area: Rect) {
     let progress_block = Block::default()
@@ -484,16 +405,35 @@ fn draw_training_rate_chart(f: &mut Frame, training_state: &TrainingState, area:
         return;
     }
 
-    // Scale training rate data for sparkline
-    let max_rate = training_state.training_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
-    let rate_data: Vec<u64> = if max_rate > 0.0 {
-        training_state
-            .training_rate_history
-            .iter()
-            .map(|&rate| ((rate / max_rate) * 100.0) as u64)
-            .collect()
+    // Calculate how many data points we can show (like fitness history)
+    let max_points = inner_area.width as usize;
+    let rate_data: Vec<u64> = if training_state.training_rate_history.len() <= max_points {
+        // Show all data
+        let max_rate = training_state.training_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
+        if max_rate > 0.0 {
+            training_state
+                .training_rate_history
+                .iter()
+                .map(|&rate| ((rate / max_rate) * 100.0) as u64)
+                .collect()
+        } else {
+            vec![0; training_state.training_rate_history.len()]
+        }
     } else {
-        vec![0; training_state.training_rate_history.len()]
+        // Sample the data to fit available width
+        let max_rate = training_state.training_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
+        if max_rate > 0.0 {
+            let step = training_state.training_rate_history.len() as f64 / max_points as f64;
+            (0..max_points)
+                .map(|i| {
+                    let idx = (i as f64 * step) as usize;
+                    let rate = training_state.training_rate_history[idx];
+                    ((rate / max_rate) * 100.0) as u64
+                })
+                .collect()
+        } else {
+            vec![0; max_points]
+        }
     };
 
     // Draw with scale on the right
@@ -508,7 +448,7 @@ fn draw_training_rate_chart(f: &mut Frame, training_state: &TrainingState, area:
     f.render_widget(sparkline, scale_chunks[0]);
 
     if scale_chunks[1].height >= 3 {
-        let _current_rate = training_state.get_current_training_rate();
+        let max_rate = training_state.training_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
         let scale_text = format!("{:.2}\n\n0.00", max_rate);
         let scale_paragraph = Paragraph::new(scale_text)
             .style(Style::default().fg(Color::Gray))
@@ -529,16 +469,35 @@ fn draw_improvement_rate_chart(f: &mut Frame, training_state: &TrainingState, ar
         return;
     }
 
-    // Scale improvement rate data for sparkline
-    let max_improvement = training_state.improvement_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
-    let improvement_data: Vec<u64> = if max_improvement > 0.0 {
-        training_state
-            .improvement_rate_history
-            .iter()
-            .map(|&rate| ((rate / max_improvement) * 100.0) as u64)
-            .collect()
+    // Calculate how many data points we can show (like fitness history)
+    let max_points = inner_area.width as usize;
+    let improvement_data: Vec<u64> = if training_state.improvement_rate_history.len() <= max_points {
+        // Show all data
+        let max_improvement = training_state.improvement_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
+        if max_improvement > 0.0 {
+            training_state
+                .improvement_rate_history
+                .iter()
+                .map(|&rate| ((rate / max_improvement) * 100.0) as u64)
+                .collect()
+        } else {
+            vec![0; training_state.improvement_rate_history.len()]
+        }
     } else {
-        vec![0; training_state.improvement_rate_history.len()]
+        // Sample the data to fit available width
+        let max_improvement = training_state.improvement_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
+        if max_improvement > 0.0 {
+            let step = training_state.improvement_rate_history.len() as f64 / max_points as f64;
+            (0..max_points)
+                .map(|i| {
+                    let idx = (i as f64 * step) as usize;
+                    let rate = training_state.improvement_rate_history[idx];
+                    ((rate / max_improvement) * 100.0) as u64
+                })
+                .collect()
+        } else {
+            vec![0; max_points]
+        }
     };
 
     // Draw with scale on the right
@@ -553,6 +512,7 @@ fn draw_improvement_rate_chart(f: &mut Frame, training_state: &TrainingState, ar
     f.render_widget(sparkline, scale_chunks[0]);
 
     if scale_chunks[1].height >= 3 {
+        let max_improvement = training_state.improvement_rate_history.iter().fold(0.0f32, |a, &b| a.max(b));
         let scale_text = format!("{:.3}\n\n0.000", max_improvement);
         let scale_paragraph = Paragraph::new(scale_text)
             .style(Style::default().fg(Color::Gray))
@@ -621,7 +581,6 @@ fn draw_enhanced_info_panel(f: &mut Frame, app: &App, area: Rect) {
             Line::from(format!("Matches: {}", training_state.total_matches_simulated)),
             Line::from(format!("Rate: {:.2} gen/s", training_state.get_current_training_rate())),
             Line::from(format!("Improve: {:.3} fit/s", training_state.get_current_improvement_rate())),
-            Line::from(format!("Max Score: {}", training_state.get_max_possible_score())),
         ]);
     }
 

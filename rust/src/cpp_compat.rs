@@ -27,7 +27,6 @@ use tracing::{debug, warn};
 #[derive(Debug)]
 pub enum CppCompatError {
     FileNotFound(String),
-    ParseError(String),
     WeightMismatch { expected: usize, found: usize },
     NoValidChampion,
     IoError(std::io::Error),
@@ -39,9 +38,7 @@ impl std::fmt::Display for CppCompatError {
             CppCompatError::FileNotFound(path) => {
                 write!(f, "C++ log file not found at: {}", path)
             }
-            CppCompatError::ParseError(msg) => {
-                write!(f, "Failed to parse C++ log file: {}", msg)
-            }
+
             CppCompatError::WeightMismatch { expected, found } => {
                 write!(f, "Weight count mismatch. Expected {}, found {}", expected, found)
             }
@@ -64,13 +61,14 @@ impl From<std::io::Error> for CppCompatError {
 }
 
 /// Metadata about the C++ log file structure and content.
+/// 
+/// # Teaching Note: Minimal Metadata Design
+/// This struct contains only the essential information needed by the application.
+/// Keeping metadata minimal reduces memory usage and simplifies the interface.
 #[derive(Debug, Clone)]
 pub struct CppLogMetadata {
-    pub total_generations: u32,
-    pub architecture_description: Option<String>,
-    pub total_individuals_found: usize,
-    pub file_size_bytes: u64,
-    pub format_version: CppLogFormat,
+    // Note: Most metadata fields have been removed as they were only used in tests
+    // and don't contribute to the core functionality of loading champions.
 }
 
 /// Different format versions of C++ log files we can handle.
@@ -111,15 +109,13 @@ pub fn load_cpp_champion_enhanced(
         )));
     }
 
-    // Get file metadata
-    let file_size = file_path.metadata()?.len();
+    // Get file metadata (not used in minimal metadata)
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
-    // Parse header line for architecture information
+    // Parse header line (not used in minimal metadata but needed for format detection)
     let header_line = lines.next().transpose()?;
-    let architecture_description = header_line.clone();
     
     // Determine log format based on header structure
     let format_version = detect_log_format(&header_line);
@@ -127,7 +123,6 @@ pub fn load_cpp_champion_enhanced(
 
     let mut last_champion_weights: Vec<f32> = Vec::new();
     let mut generation_count = 0u32;
-    let mut total_individuals_found = 0usize;
     let mut parsing_errors = Vec::new();
 
     // Collect all lines for analysis
@@ -181,7 +176,6 @@ pub fn load_cpp_champion_enhanced(
                     if weight_count == weights.len() && weight_count == TOTAL_WEIGHTS {
                         _last_valid_weights_line = Some((line_num + 1, weights.clone()));
                         last_champion_weights = weights;
-                        total_individuals_found += 1;
                         debug!("Found valid champion at line {} with {} weights", 
                                line_num + 1, weight_count);
                     } else if weight_count != weights.len() {
@@ -195,8 +189,6 @@ pub fn load_cpp_champion_enhanced(
                             line_num + 1, weight_count, TOTAL_WEIGHTS
                         ));
                     }
-                } else {
-                    total_individuals_found += 1; // Count malformed entries too
                 }
             }
         }
@@ -226,13 +218,7 @@ pub fn load_cpp_champion_enhanced(
     }
 
     // Create metadata about the loaded file
-    let metadata = CppLogMetadata {
-        total_generations: generation_count,
-        architecture_description,
-        total_individuals_found,
-        file_size_bytes: file_size,
-        format_version,
-    };
+    let metadata = CppLogMetadata {};
 
     // Create a compatible configuration that matches C++ behavior
     let cpp_config = create_cpp_compatible_config(generation_count, &metadata);
@@ -329,28 +315,19 @@ fn create_cpp_compatible_config(generation_count: u32, _metadata: &CppLogMetadat
         random_ball_direction: false, // C++ version typically uses fixed direction
         concurrent: false,            // C++ version was single-threaded
         random_seed: None,           // C++ used system time as seed
+        simulation_speed: 1.0,       // Normal speed for C++ compatibility
         
         // Metadata
         date_trained: None, // Unknown from C++ logs
     }
 }
 
-/// Validates that a C++ log file can be successfully parsed.
-///
-/// # Teaching Note: Validation Functions
-/// Validation functions are useful for:
-/// - Pre-flight checks before expensive operations
-/// - Providing detailed feedback about data quality
-/// - Separating validation logic from parsing logic
-pub fn validate_cpp_log_file(path: &str) -> Result<CppLogMetadata, CppCompatError> {
-    let (_, _, metadata) = load_cpp_champion_enhanced(path)?;
-    Ok(metadata)
-}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -363,8 +340,8 @@ mod tests {
 
     /// Helper to generate random weights for testing.
     fn generate_test_weights() -> Vec<f32> {
-        let mut rng = thread_rng();
-        (0..TOTAL_WEIGHTS).map(|_| rng.gen_range(-1.0..1.0)).collect()
+        let mut rng = rng();
+        (0..TOTAL_WEIGHTS).map(|_| rng.random_range(-1.0..1.0)).collect()
     }
 
     #[test]
@@ -381,12 +358,11 @@ mod tests {
         let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
         assert!(result.is_ok());
         
-        let (loaded_weights, config, metadata) = result.unwrap();
+        let (loaded_weights, config, _metadata) = result.unwrap();
         assert_eq!(loaded_weights.len(), TOTAL_WEIGHTS);
         assert_eq!(config.engine, Engine::Cpu);
         assert!(config.name.unwrap().contains("C++ Champion"));
-        assert_eq!(metadata.total_generations, 1);
-        assert_eq!(metadata.format_version, CppLogFormat::Original);
+        // Metadata field checks removed since fields are no longer tracked
         
         // Compare weights with tolerance
         for (a, b) in loaded_weights.iter().zip(weights.iter()) {
@@ -412,8 +388,8 @@ mod tests {
         let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
         assert!(result.is_ok());
         
-        let (loaded_weights, _, metadata) = result.unwrap();
-        assert_eq!(metadata.total_generations, 2);
+        let (loaded_weights, _, _metadata) = result.unwrap();
+        // Metadata field checks removed since fields are no longer tracked
         
         // Should load the last (most recent) champion
         for (a, b) in loaded_weights.iter().zip(weights2.iter()) {
@@ -438,10 +414,9 @@ mod tests {
         let result = load_cpp_champion_enhanced(file.path().to_str().unwrap());
         assert!(result.is_ok());
         
-        let (loaded_weights, _, metadata) = result.unwrap();
+        let (loaded_weights, _, _metadata) = result.unwrap();
         assert_eq!(loaded_weights.len(), TOTAL_WEIGHTS);
-        assert_eq!(metadata.total_generations, 3);
-        assert_eq!(metadata.total_individuals_found, 3); // Including malformed ones
+        // Metadata field checks removed since fields are no longer tracked
         
         // Should have loaded the valid weights
         for (a, b) in loaded_weights.iter().zip(valid_weights.iter()) {
@@ -508,23 +483,5 @@ mod tests {
         assert_eq!(config.engine, Engine::Cpu);
     }
 
-    #[test]
-    fn test_validate_cpp_log_file() {
-        let weights = generate_test_weights();
-        let weights_str = weights.iter()
-            .map(|w| w.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
 
-        let content = format!("4 8 16 4 1\n1\n{} {}\n", TOTAL_WEIGHTS, weights_str);
-        let file = create_test_log_file(&content);
-
-        let result = validate_cpp_log_file(file.path().to_str().unwrap());
-        assert!(result.is_ok());
-        
-        let metadata = result.unwrap();
-        assert_eq!(metadata.total_generations, 1);
-        assert_eq!(metadata.total_individuals_found, 1);
-        assert_eq!(metadata.format_version, CppLogFormat::Original);
-    }
 }

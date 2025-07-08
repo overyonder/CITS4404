@@ -8,33 +8,25 @@ mod traits;
 mod tui;
 mod utils;
 
-use crate::traits::Individual;
+use std::{fs, io, path::Path};
+
+use clap::Parser;
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
+
 use crate::{
-    config::{Activation, Config, Engine, FitnessFunc, MutationStrategy},
-    engines::{GpuIndividual, StackIndividual},
+    config::{Config, Engine},
+    engines::StackIndividual,
+    gamestate::GameState,
     population::Population,
+    traits::Individual,
     tui::ui::run_app,
 };
-use clap::Parser;
-use std::fs;
-use std::io;
-use std::path::Path;
-use tracing::{error, info, warn};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Command-line arguments for configuring the evolutionary algorithm and neural network engine.
-///
-/// This struct uses `clap` to define and parse command-line arguments, allowing for
-/// flexible configuration of the application when running in headless/CLI mode.
-///
-/// # Teaching Note
-///
-/// This is a great example of using a declarative macro (`#[derive(Parser)]`) to automatically
-/// generate a command-line parser. Each field corresponds to a potential command-line argument.
-/// The `#[arg(...)]` attributes provide metadata like short/long names, help text, and default values.
-/// This pattern separates configuration from application logic, making the code cleaner and easier to maintain.
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[derive(Parser)]
+#[command(name = "CITS4404-Project")]
+#[command(about = "A neural network training application using evolutionary algorithms")]
+#[command(version)]
 struct Args {
     /// The neural network engine to use for forward propagation.
     #[arg(short, long, default_value = "stack")]
@@ -70,11 +62,11 @@ struct Args {
 
     /// The mutation strategy to use for evolution.
     #[arg(long, value_enum, default_value_t = Config::default().mutation_strategy)]
-    mutation_strategy: MutationStrategy,
+    mutation_strategy: crate::config::MutationStrategy,
 
     /// The fitness function to use for evolution.
     #[arg(long, value_enum, default_value_t = Config::default().fitness_func)]
-    fitness_func: FitnessFunc,
+    fitness_func: crate::config::FitnessFunc,
 
     /// Path to save the best individual to after training is complete.
     #[arg(long)]
@@ -88,16 +80,27 @@ struct Args {
 
 /// Application entry point.
 fn main() -> io::Result<()> {
-    // Initialize tracing with tui-logger as a layer.
+    // === Enhanced Logging Configuration ===
+    // Configure tracing subscriber with conditional console output
+    // In TUI mode, we disable console logging to avoid disrupting the interface
+    // In CLI mode, we enable full logging for debugging and monitoring
+    let args = Args::parse();
+    if args.load_from.is_some() || std::env::args().len() > 1 {
+        // CLI mode: Enable full console logging
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env().add_directive("rust=info".parse().unwrap()))
+            .init();
+    } else {
+        // TUI mode: Suppress console output to prevent UI disruption
+        // Only log to stderr at error level to avoid interfering with the TUI
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(EnvFilter::from_default_env().add_directive("rust=error".parse().unwrap()))
+            .init();
+    }
+
     // This allows `tracing` macros (info!, error!, etc.) to be captured
-    // and displayed in the TUI's log widget.
-    tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,wgpu=error,naga=warn")),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // by the subscriber we just configured above.
 
     let args = Args::parse();
 
@@ -147,12 +150,12 @@ fn run_cli(args: Args) {
 
     if let Some(ref act) = args.activation {
         config.activation = match act.to_lowercase().as_str() {
-            "clampedlinear" | "clamped_linear" | "clamped-linear" => Activation::ClampedLinear,
-            "tanh" => Activation::Tanh,
-            "relu" => Activation::Relu,
-            "atan" => Activation::Atan,
-            "sigmoid" => Activation::Sigmoid,
-            "linear" => Activation::Linear,
+            "clampedlinear" | "clamped_linear" | "clamped-linear" => crate::config::Activation::ClampedLinear,
+            "tanh" => crate::config::Activation::Tanh,
+            "relu" => crate::config::Activation::Relu,
+            "atan" => crate::config::Activation::Atan,
+            "sigmoid" => crate::config::Activation::Sigmoid,
+            "linear" => crate::config::Activation::Linear,
             _ => {
                 warn!("Unknown activation: {}. Using default.", act);
                 config.activation
@@ -197,7 +200,8 @@ fn run_cli(args: Args) {
     // We use the macro to generate type-specific code for each engine, avoiding dyn Trait.
     match config.engine {
         Engine::Cpu => run_evolution!(StackIndividual, config, args),
-        Engine::Gpu => run_evolution!(GpuIndividual, config, args),
+        // GPU batch processing uses lightweight StackIndividual with GpuBatchEngine for GPU operations
+        Engine::Gpu => run_evolution!(StackIndividual, config, args),
     };
 
     info!("Evolution finished.");
@@ -225,7 +229,7 @@ fn run_simulation_from_file(path: &str) -> Result<(), Box<dyn std::error::Error>
 
 /// Runs a single game simulation between two instances of the same individual.
 fn run_game_simulation<I: Individual>(individual: &I, config: &Config) {
-    let mut game_state = gamestate::GameState::new();
+    let mut game_state = GameState::new();
     let ((left_primary, _), (right_primary, _)) =
         game_state.simulate(individual, individual, config);
 

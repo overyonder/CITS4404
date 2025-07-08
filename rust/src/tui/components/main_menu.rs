@@ -124,7 +124,6 @@ fn handle_menu_selection(app: &mut App, selected: usize) {
             // "Train New Model"
             app.state = AppState::Configuring;
             app.error_message = None;
-            app.success_message = Some("Configure your neural network training parameters".to_string());
         }
         1 => {
             // "Simulate" - Enhanced model loading with better error messages
@@ -140,10 +139,6 @@ fn handle_menu_selection(app: &mut App, selected: usize) {
                         app.simulation_setup = Some(SimulationSetupState::new(models.clone()));
                         app.state = AppState::SimulationSetup;
                         app.error_message = None;
-                        app.success_message = Some(format!(
-                            "Loaded {} model(s) successfully. Select models for simulation.",
-                            models.len()
-                        ));
                     }
                 }
                 Err(e) => {

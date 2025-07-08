@@ -231,6 +231,10 @@ pub struct Config {
     /// Random seed for reproducible experiments (None = random seed)
     /// **Purpose**: Enables exact reproduction of training runs for research
     pub random_seed: Option<u64>,
+    /// Simulation speed multiplier for adjustable training visualization
+    /// **Range**: 0.1-10.0, where 1.0 = normal speed, 2.0 = 2x faster, 0.5 = half speed
+    /// **Purpose**: Allows fine-tuning of training visualization speed for optimal observation
+    pub simulation_speed: f32,
 }
 
 /// Provides a scientifically sound default configuration for the evolutionary algorithm.
@@ -251,7 +255,7 @@ impl Default for Config {
             // Core algorithm
             engine: Engine::default(),
             activation: Activation::ClampedLinear, // C++ equivalent
-            generations: 100,
+            generations: 5000,
             concurrent: false,
 
             // Population parameters
@@ -276,8 +280,8 @@ impl Default for Config {
             max_mutation_rate: 0.2,   // 20% maximum
 
             // Convergence criteria
-            early_stopping_patience: Some(20), // Stop after 20 generations without improvement
-            fitness_threshold: Some(0.001),    // 0.1% improvement threshold
+            early_stopping_patience: None, // No early stopping by default
+            fitness_threshold: Some(0.01),     // 1% improvement threshold (updated range)
             track_diversity: false,
 
             // Fitness function
@@ -287,6 +291,7 @@ impl Default for Config {
             // Simulation
             random_ball_direction: false, // C++ default: fixed direction
             random_seed: None,           // Random seed each run
+            simulation_speed: 1.0,       // Normal speed (1x multiplier)
         }
     }
 }
