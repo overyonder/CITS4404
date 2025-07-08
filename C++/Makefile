@@ -4,7 +4,7 @@
 CXX = g++
 CXXFLAGS = -std=c++11 -Wall -Wextra -O2
 DEBUG_FLAGS = -g -DDEBUG
-RELEASE_FLAGS = -O3 -DNDEBUG -march=native
+RELEASE_FLAGS = -O3 -DNDEBUG -march=native -ffast-math
 
 # Directories
 SRC_DIR = src
