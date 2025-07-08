@@ -55,38 +55,60 @@ pub fn load_cpp_champion(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{rng, Rng};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
     #[test]
     fn test_load_valid_champion() {
         let mut file = NamedTempFile::new().unwrap();
-        let weights: Vec<f32> = (0..TOTAL_WEIGHTS).map(|i| i as f32 * 0.1).collect();
-        let weights_str: String = weights.iter().map(|w| w.to_string()).collect::<Vec<_>>().join(" ");
-        writeln!(file, "Generation 1:").unwrap();
-        writeln!(file, "{}", weights_str).unwrap();
+        let mut rng = rng();
+        let weights: Vec<f32> = (0..217).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let weights_str: String = weights
+            .iter()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let content = format!("4 8 16 4 1\n1\n217 {}\n", weights_str);
+        file.write_all(content.as_bytes()).unwrap();
 
         let result = load_cpp_champion(file.path().to_str().unwrap());
         assert!(result.is_ok());
         let loaded_weights = result.unwrap();
-        assert_eq!(loaded_weights.len(), TOTAL_WEIGHTS);
-        assert_eq!(loaded_weights, weights);
+        assert_eq!(loaded_weights.len(), 217);
+        // Compare floats with a tolerance
+        for (a, b) in loaded_weights.iter().zip(weights.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
     }
 
     #[test]
     fn test_malformed_data_is_skipped() {
         let mut file = NamedTempFile::new().unwrap();
-        let valid_weights: Vec<f32> = (0..TOTAL_WEIGHTS).map(|i| i as f32 * 0.1).collect();
-        let valid_weights_str: String = valid_weights.iter().map(|w| w.to_string()).collect::<Vec<_>>().join(" ");
+        let mut rng = rng();
+        let valid_weights: Vec<f32> = (0..217).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let valid_weights_str: String = valid_weights
+            .iter()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
 
-        writeln!(file, "Generation 1:").unwrap();
-        writeln!(file, "some malformed text here").unwrap();
-        writeln!(file, "1 2 3 4 5").unwrap(); // Incorrect weight count
-        writeln!(file, "{}", valid_weights_str).unwrap(); // The last valid entry
+        let content = format!(
+            "4 8 16 4 1\n1\n10 a b c\n1\n217 {}\n1\n5 d e f\n",
+            valid_weights_str
+        );
+        file.write_all(content.as_bytes()).unwrap();
 
         let result = load_cpp_champion(file.path().to_str().unwrap());
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), valid_weights);
+        let loaded_weights = result.unwrap();
+
+        // It should have loaded the first valid genome it found
+        assert_eq!(loaded_weights.len(), 217);
+        for (a, b) in loaded_weights.iter().zip(valid_weights.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
     }
 
     #[test]

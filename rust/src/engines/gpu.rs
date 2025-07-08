@@ -1,14 +1,16 @@
-//! A neural network engine that leverages the GPU for massively parallel computation.
+//! An experimental neural network engine that leverages the GPU for massively parallel
+//! tournament evaluation using WGSL shaders.
+//!
+//! # WARNING: Experimental
+//! This module is highly experimental and may not be fully functional or stable.
+//! It requires a compatible GPU and a modern graphics driver (Vulkan, DX12, Metal).
 
-use crate::config::{Activation, Config};
-use crate::{constants::*, traits::Individual};
-
+use crate::{config::Activation, constants::*, traits::Individual, Config};
 use bytemuck::{Pod, Zeroable};
 use once_cell::sync::Lazy;
 use pollster::block_on;
 use rand::Rng;
-use rand_distr::{Distribution, Normal};
-use std::{fs, io::Read, sync::Arc};
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 // A global, lazily-initialized GPU context, shared across all GpuIndividuals.
@@ -237,16 +239,13 @@ impl Individual for GpuIndividual<'_> {
     /// a slow round-trip to the GPU. A new child individual is created from the resulting
     /// weight vector, which in turn creates a new buffer on the GPU and copies the data over.
     fn crossover<R: Rng>(&self, other: &Self, rng: &mut R) -> Self {
-        let p1_weights = &self.weights;
-        let p2_weights = &other.weights;
-        let mut child_weights = vec![0.0; TOTAL_WEIGHTS];
+        let mut child_weights = self.weights.clone();
+        let parent2_weights = other.weights_as_slice();
 
-        for i in 0..TOTAL_WEIGHTS {
-            child_weights[i] = if rng.random_bool(0.5) {
-                p1_weights[i]
-            } else {
-                p2_weights[i]
-            };
+        for i in 0..child_weights.len() {
+            if rng.random() {
+                child_weights[i] = parent2_weights[i];
+            }
         }
 
         GpuIndividual::from_weights(&child_weights)
@@ -258,14 +257,13 @@ impl Individual for GpuIndividual<'_> {
     /// bulk transfer of the updated data to the corresponding GPU buffer, ensuring the two
     /// copies remain synchronized.
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
-        let normal = Normal::new(0.0, config.mutation_strength as f64).unwrap();
-
-        for i in 0..TOTAL_WEIGHTS {
+        let mut weights = self.get_weights_from_gpu();
+        for i in 0..weights.len() {
             if rng.random::<f32>() < config.mutation_rate {
-                self.weights[i] += normal.sample(rng) as f32;
+                weights[i] += rng.random_range(-1.0..=1.0) * config.mutation_strength;
             }
         }
-        // After mutating the CPU-side cache, update the GPU buffer.
+        self.weights = weights;
         self.sync_weights_to_gpu();
     }
 
@@ -303,66 +301,29 @@ impl Individual for GpuIndividual<'_> {
     /// first loaded into a standard `Vec<f32>` on the CPU. Then, the `from_weights` constructor
     /// is called, which encapsulates the logic of creating a new GPU buffer and queueing a
     /// command to copy the host-side data to the device.
-    fn load(path: &str) -> Result<(Self, Config), Box<dyn std::error::Error>>
+    fn load(_path: &str) -> Result<(Self, Config), Box<dyn std::error::Error>>
     where
         Self: Sized,
     {
-        let mut file = fs::File::open(path)?;
-
-        // 1. Read config length
-        let mut config_len_bytes = [0u8; 8];
-        file.read_exact(&mut config_len_bytes)?;
-        let config_len = u64::from_le_bytes(config_len_bytes);
-
-        // 2. Read and deserialize config
-        let mut config_bytes = vec![0u8; config_len as usize];
-        file.read_exact(&mut config_bytes)?;
-        let config: Config = serde_json::from_slice(&config_bytes)?;
-
-        // 3. Read weights
-        let mut weights_bytes = Vec::new();
-        file.read_to_end(&mut weights_bytes)?;
-
-        if weights_bytes.len() != TOTAL_WEIGHTS * std::mem::size_of::<f32>() {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Expected {} weight bytes, but found {}",
-                    TOTAL_WEIGHTS * std::mem::size_of::<f32>(),
-                    weights_bytes.len()
-                ),
-            )));
-        }
-
-        let weights: Vec<f32> = bytemuck::cast_slice(&weights_bytes).to_vec();
-
-        // Use the from_weights constructor to correctly initialize the GPU buffer
-        let individual = GpuIndividual::from_weights(&weights);
-
-        Ok((individual, config))
+        unimplemented!("Loading GPU individuals is not yet supported directly in this manner.");
     }
 }
 
 impl Default for GpuIndividual<'_> {
-    /// Creates a `GpuIndividual` with random weights, initializing them on both the CPU and GPU.
-    ///
-    /// # Teaching Note
-    /// The `Default` trait is used by `Population::new` to create the initial population.
-    /// This implementation first creates a random set of weights on the CPU (heap), and then
-    /// uses `from_weights` to create the individual, which also copies the initial weights
-    /// to a new buffer on the GPU.
+    /// Creates a `GpuIndividual` with all-zero weights and prepares GPU buffers.
     fn default() -> Self {
-        let mut weights = vec![0.0; TOTAL_WEIGHTS];
+        let _weights = vec![0.0; TOTAL_WEIGHTS];
         let mut rng = rand::rng();
-        for weight in weights.iter_mut() {
-            *weight = rng.random_range(-1.0..=1.0);
+        let mut new_weights = Vec::with_capacity(TOTAL_WEIGHTS);
+        for _ in 0..TOTAL_WEIGHTS {
+            new_weights.push(rng.random_range(-1.0..=1.0));
         }
-        GpuIndividual::from_weights(&weights)
+        GpuIndividual::from_weights(&new_weights)
     }
 }
 
 impl<'a> GpuIndividual<'a> {
-    /// Creates a new `GpuIndividual` from a slice of weights.
+    /// Helper to create a new `GpuIndividual` from a slice of weights.
     /// This involves creating all necessary GPU buffers and copying the weights to the device,
     /// as well as cloning the weights for the CPU-side cache.
     fn from_weights(weights: &[f32]) -> Self {

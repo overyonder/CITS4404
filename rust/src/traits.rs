@@ -7,6 +7,7 @@
 use crate::config::{Activation, Config};
 use crate::constants::{INPUT_SIZE, OUTPUT_SIZE, TOTAL_WEIGHTS};
 use rand::Rng;
+use rand_distr::Distribution;
 use std::fs::File;
 use std::io::Write;
 
@@ -47,7 +48,7 @@ pub trait Individual: Default + Clone + Send + Sync {
         let child_weights = child.weights_as_mut_slice();
 
         for i in 0..TOTAL_WEIGHTS {
-            child_weights[i] = if rng.random::<bool>() {
+            child_weights[i] = if rng.random() {
                 parent1_weights[i]
             } else {
                 parent2_weights[i]

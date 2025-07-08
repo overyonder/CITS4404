@@ -9,7 +9,6 @@ use crate::{
     constants::*,
     traits::Individual,
 };
-use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
 /// Represents the full state of a Pong game simulation at a single point in time.
@@ -71,7 +70,7 @@ impl GameState {
         self.scores = (0, 0);
         self.returns = (0, 0);
         self.shots = (0, 0);
-        self.reset_ball(rand::rng().random());
+        self.reset_ball(rand::random());
     }
 
     /// Prepares the 8-element input array for the **left paddle's** neural network.
@@ -201,6 +200,8 @@ impl GameState {
         self.ball_pos.0 += self.ball_vel.0;
         self.ball_pos.1 += self.ball_vel.1;
 
+        let mut paddle_hit = false;
+
         // Top/Bottom wall collision
         if (self.ball_pos.1 <= 0.0 && self.ball_vel.1 < 0.0)
             || (self.ball_pos.1 >= HEIGHT as f32 && self.ball_vel.1 > 0.0)
@@ -217,13 +218,16 @@ impl GameState {
             let paddle_top = paddle1_box.1 - PADDLE_HEIGHT / 2.0;
             let paddle_bottom = paddle1_box.1 + PADDLE_HEIGHT / 2.0;
             if self.ball_pos.1 >= paddle_top && self.ball_pos.1 <= paddle_bottom {
+                self.ball_pos.0 = paddle1_box.0; // Clamp ball to paddle front
+                paddle_hit = true;
+
                 self.ball_vel.0 = self.ball_vel.0.abs(); // Reflect ball horizontally
                 self.ball_vel.1 += self.paddle1_vel; // Add paddle's velocity
 
                 // Add random deflection
                 let mut rng = rand::rng();
                 self.ball_vel.1 +=
-                    Normal::from_mean_cv(0.0, 0.05).unwrap().sample(&mut rng) * BALL_INITIAL_VEL_Y;
+                    Normal::new(0.0, 0.05).unwrap().sample(&mut rng) * BALL_INITIAL_VEL_Y;
 
                 self.returns.0 += 1;
             }
@@ -232,13 +236,16 @@ impl GameState {
             let paddle_top = paddle2_box.1 - PADDLE_HEIGHT / 2.0;
             let paddle_bottom = paddle2_box.1 + PADDLE_HEIGHT / 2.0;
             if self.ball_pos.1 >= paddle_top && self.ball_pos.1 <= paddle_bottom {
+                self.ball_pos.0 = paddle2_box.0; // Clamp ball to paddle front
+                paddle_hit = true;
+
                 self.ball_vel.0 = -self.ball_vel.0.abs(); // Reflect ball horizontally
                 self.ball_vel.1 += self.paddle2_vel; // Add paddle's velocity
 
                 // Add random deflection
                 let mut rng = rand::rng();
                 self.ball_vel.1 +=
-                    Normal::from_mean_cv(0.0, 0.05).unwrap().sample(&mut rng) * BALL_INITIAL_VEL_Y;
+                    Normal::new(0.0, 0.05).unwrap().sample(&mut rng) * BALL_INITIAL_VEL_Y;
 
                 self.returns.1 += 1;
             }
@@ -285,16 +292,18 @@ impl GameState {
 
         // Score detection. Check if the ball has passed the screen edge.
         // This matches the C++ version which uses ball center position.
-        if self.ball_pos.0 < 0.0 {
-            self.scores.1 += 1; // Player 2 (right) scores
-            self.paddle1_pos = (HEIGHT / 2) as f32;
-            self.paddle2_pos = (HEIGHT / 2) as f32;
-            self.reset_ball(true); // Serve to player 2 (right)
-        } else if self.ball_pos.0 > WIDTH as f32 {
-            self.scores.0 += 1; // Player 1 (left) scores
-            self.paddle1_pos = (HEIGHT / 2) as f32;
-            self.paddle2_pos = (HEIGHT / 2) as f32;
-            self.reset_ball(false); // Serve to player 1 (left)
+        if !paddle_hit {
+            if self.ball_pos.0 < 0.0 {
+                self.scores.1 += 1; // Player 2 (right) scores
+                self.paddle1_pos = (HEIGHT / 2) as f32;
+                self.paddle2_pos = (HEIGHT / 2) as f32;
+                self.reset_ball(true); // Serve to player 2 (right)
+            } else if self.ball_pos.0 > WIDTH as f32 {
+                self.scores.0 += 1; // Player 1 (left) scores
+                self.paddle1_pos = (HEIGHT / 2) as f32;
+                self.paddle2_pos = (HEIGHT / 2) as f32;
+                self.reset_ball(false); // Serve to player 1 (left)
+            }
         }
     }
 
