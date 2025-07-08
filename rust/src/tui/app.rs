@@ -1,14 +1,14 @@
 //! Application state and main loop for the TUI.
 use crate::config::Config;
-use crate::tui::{simulation::SimulationState, training::TrainingState};
-
-use ratatui::widgets::TableState;
-use std::path::PathBuf;
+use crate::tui::components::main_menu::MainMenu;
+use crate::tui::simulation::SimulationState;
+use crate::tui::training::{TrainingMessage, TrainingState};
 use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
 
 /// Represents the current high-level state or view of the TUI.
 /// The main event loop will render and handle input differently based on this state.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppState {
     /// The initial view, allowing the user to select a mode.
     MainMenu,
@@ -20,31 +20,30 @@ pub enum AppState {
     Training,
     /// The view for visualizing a game of Pong with a trained neural network.
     Simulation,
-    /// A transient state for loading a C++ champion.
-    LoadCppChampion,
     /// A transient state that signals the main loop to terminate.
     Exiting,
 }
 
 /// Represents the different tabs available in the Training view.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub enum Tab {
-    Generations,
-    Matchups,
+    Generations = 0,
+    Matchups = 1,
 }
 
 /// Holds metadata for a single, loadable simulation model.
 #[derive(Clone)]
 pub struct ModelInfo {
-    pub path: PathBuf,
+    pub path: std::path::PathBuf,
     pub config: Config,
+    pub is_cpp: bool,
 }
 
 /// Holds the state for the simulation model selection UI.
 pub struct SimulationSetupState {
     pub models: Vec<ModelInfo>,
-    pub left_paddle_state: TableState,
-    pub right_paddle_state: TableState,
+    pub left_paddle_state: ratatui::widgets::TableState,
+    pub right_paddle_state: ratatui::widgets::TableState,
     /// 0 for left table, 1 for right table.
     pub active_table: usize,
 }
@@ -96,11 +95,11 @@ impl SimulationSetupState {
     }
 
     pub fn new(models: Vec<ModelInfo>) -> Self {
-        let mut left_paddle_state = TableState::default();
+        let mut left_paddle_state = ratatui::widgets::TableState::default();
         if !models.is_empty() {
             left_paddle_state.select(Some(0));
         }
-        let mut right_paddle_state = TableState::default();
+        let mut right_paddle_state = ratatui::widgets::TableState::default();
         if !models.is_empty() {
             right_paddle_state.select(Some(0));
         }
@@ -114,29 +113,33 @@ impl SimulationSetupState {
     }
 }
 
-/// Holds the state for the configuration editor UI.
-#[derive(Default)]
+/// State for the configuration editor screen.
 pub struct ConfigEditor {
-    /// The index of the currently selected configuration item.
-    pub selected_index: usize,
+    /// The index of the currently selected configuration option.
+    pub state: ratatui::widgets::TableState,
 }
 
-/// The core application struct that holds all state for the TUI.
+impl Default for ConfigEditor {
+    fn default() -> Self {
+        let mut state = ratatui::widgets::TableState::default();
+        state.select(Some(0));
+        Self { state }
+    }
+}
+
+
+/// Holds the state for the entire TUI application.
 ///
-/// # Fields
-/// - `state`: The current active `AppState`.
-/// - `config`: The `EvolutionConfig` used for training and simulation.
-/// - `main_menu`: State for the main menu widget.
-/// - `training`: State for the training view. `None` if not in training mode.
-/// - `simulation`: State for the simulation view. `None` if not in simulation mode.
-/// - `tab`: The index of the currently selected tab within a view (if applicable).
-/// - `tx`, `rx`: Sender and Receiver for message passing between the main UI thread
+/// This struct is the central piece of data that the UI renders and the event loop
+/// modifies. It contains the state for all the different views (main menu, training, etc.)
 ///   and a background worker thread (e.g., for running the training process without
 ///   blocking the UI).
 pub struct App {
     pub state: AppState,
     pub config: Config,
-    pub main_menu: crate::tui::components::main_menu::MainMenu,
+    pub error_message: Option<String>,
+    pub success_message: Option<String>,
+    pub main_menu: MainMenu,
     pub config_editor: ConfigEditor,
     pub training: Option<TrainingState>,
     pub simulation: Option<SimulationState>,
@@ -145,10 +148,9 @@ pub struct App {
     pub best_genome: Option<Vec<f32>>,
     /// The active tab in the training view.
     pub active_tab: Tab,
-
-    pub tx: Option<Sender<crate::tui::training::TrainingMessage>>,
-    pub rx: Option<Receiver<crate::tui::training::TrainingMessage>>,
-    pub error_message: Option<String>,
+    pub training_thread: Option<thread::JoinHandle<()>>,
+    pub tx: Option<Sender<TrainingMessage>>,
+    pub rx: Option<Receiver<TrainingMessage>>,
 }
 
 impl App {
@@ -157,24 +159,22 @@ impl App {
         Self {
             state: AppState::MainMenu,
             config: Config::default(),
-            main_menu: crate::tui::components::main_menu::MainMenu::default(),
+            error_message: None,
+            success_message: None,
+            main_menu: MainMenu::default(),
             config_editor: ConfigEditor::default(),
             training: None,
             simulation: None,
             simulation_setup: None,
             best_genome: None,
             active_tab: Tab::Generations,
+            training_thread: None,
             tx: None,
             rx: None,
-            error_message: None,
         }
     }
 
-    /// Runs the main TUI event loop.
-    ///
-    /// This function delegates to the `main_event_loop` in the `ui` module,
-    /// which handles drawing and event processing.
-    /// Switches to the next tab in the training view.
+    /// Cycles through the tabs in the training view.
     pub fn next_tab(&mut self) {
         self.active_tab = match self.active_tab {
             Tab::Generations => Tab::Matchups,

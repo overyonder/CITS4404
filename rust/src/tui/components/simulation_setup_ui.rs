@@ -1,9 +1,12 @@
 //! The simulation setup screen component.
 
-use crate::tui::{
-    app::{App, AppState},
-    model_loader,
-    simulation::SimulationState,
+use crate::{
+    cpp_compat,
+    tui::{
+        app::{App, AppState},
+        model_loader,
+        simulation::SimulationState,
+    },
 };
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -33,10 +36,19 @@ pub fn handle_simulation_setup_input(app: &mut App, key_code: KeyCode) {
                         let left_model_info = &setup_state.models[left_index];
                         let right_model_info = &setup_state.models[right_index];
 
-                        match (
-                            model_loader::load_model_from_file(&left_model_info.path),
-                            model_loader::load_model_from_file(&right_model_info.path),
-                        ) {
+                        let left_result = if left_model_info.is_cpp {
+                            cpp_compat::load_cpp_champion(&left_model_info.path.to_string_lossy())
+                        } else {
+                            model_loader::load_model_from_file(&left_model_info.path)
+                        };
+
+                        let right_result = if right_model_info.is_cpp {
+                            cpp_compat::load_cpp_champion(&right_model_info.path.to_string_lossy())
+                        } else {
+                            model_loader::load_model_from_file(&right_model_info.path)
+                        };
+
+                        match (left_result, right_result) {
                             (Ok((left_weights, left_config)), Ok((right_weights, right_config))) => {
                                 app.simulation = Some(SimulationState::new(
                                     left_weights,
@@ -113,10 +125,22 @@ pub fn draw_simulation_setup_ui(f: &mut Frame, app: &mut App, area: Rect) {
                     .date_trained
                     .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                     .unwrap_or_else(|| "N/A".to_string());
+                let (model_name, gen_str) = if item.is_cpp {
+                    (
+                        "C++ Champion".to_string(),
+                        item.config.generations.to_string(),
+                    )
+                } else {
+                    (
+                        item.path.file_name().unwrap().to_str().unwrap().to_string(),
+                        item.config.generations.to_string(),
+                    )
+                };
+
                 let cells = vec![
-                    Cell::from(item.path.file_name().unwrap().to_str().unwrap()),
+                    Cell::from(model_name),
                     Cell::from(date_str),
-                    Cell::from(item.config.generations.to_string()),
+                    Cell::from(gen_str),
                 ];
                 Row::new(cells).height(1)
             })

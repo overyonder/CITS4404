@@ -1,23 +1,24 @@
 //! UI rendering and main event loop for the TUI.
 
 use crate::{
-    cpp_compat,
     tui::{
         app::{App, AppState},
-        simulation::SimulationState,
+        components,
         training::{MatchupState, TrainingMessage},
     },
-    traits::Individual,
+    Individual,
 };
 use crossterm::event::{self, Event, KeyEventKind};
-use ratatui::{backend::CrosstermBackend, layout::Alignment, widgets::Paragraph, Frame, Terminal};
+use ratatui::{
+    backend::CrosstermBackend,
+    style::Color,
+    Frame, Terminal,
+};
 use std::{
     fs,
     io::{Result, Stdout},
+    path::Path,
 };
-
-// This module is declared in `tui/mod.rs`, so it's available to its sibling `ui.rs`.
-use super::components;
 
 /// Main event loop for the TUI, handling events and rendering.
 pub fn main_event_loop(
@@ -66,21 +67,31 @@ fn handle_events(app: &mut App) -> Result<()> {
                             ts.running = false;
                             // Save the best genome when training is finished.
                             if let Some(genome) = &app.best_genome {
-                                // The GPUIndividual has a lifetime parameter, which makes it
-                                // difficult to use in the `save` function signature directly
-                                // with the other `Individual` types. We can work around this
-                                // by creating a temporary `StackIndividual` from the weights,
-                                // as the `save` implementation is identical for all CPU-based
-                                // engines.
                                 if let Ok(weights_array) = genome.clone().try_into() {
                                     let temp_individual = crate::engines::StackIndividual {
                                         weights: weights_array,
                                     };
+
                                     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
                                     let filename = format!("models/{}_champion.bin", timestamp);
-                                    if let Err(e) = temp_individual.save(&filename, &app.config) {
+
+                                    // Clone the config, and set the name before saving.
+                                    let mut config_to_save = app.config.clone();
+                                    config_to_save.name = Some(
+                                        Path::new(&filename)
+                                            .file_stem()
+                                            .unwrap()
+                                            .to_string_lossy()
+                                            .to_string(),
+                                    );
+
+                                    if let Err(e) = temp_individual.save(&filename, &config_to_save)
+                                    {
                                         app.error_message =
                                             Some(format!("Failed to save champion: {}", e));
+                                    } else {
+                                        app.success_message =
+                                            Some(format!("Champion saved to {}", filename));
                                     }
                                 } else {
                                     app.error_message = Some(format!(
@@ -100,23 +111,6 @@ fn handle_events(app: &mut App) -> Result<()> {
                 sim.step(&app.config);
             }
         }
-        AppState::LoadCppChampion => match cpp_compat::load_cpp_champion("fittest.log") {
-            Ok((weights, config)) => {
-                app.best_genome = Some(weights.clone());
-                app.simulation = Some(SimulationState::new(
-                    weights.clone(),
-                    weights,
-                    config.clone(),
-                    config,
-                ));
-                app.state = AppState::Simulation;
-                app.error_message = None;
-            }
-            Err(e) => {
-                app.error_message = Some(format!("Failed to load C++ champion: {}", e));
-                app.state = AppState::MainMenu;
-            }
-        },
         _ => {}
     }
 
@@ -129,6 +123,10 @@ fn handle_events(app: &mut App) -> Result<()> {
                 if app.error_message.is_some() {
                     app.error_message = None;
                     return Ok(()); // Consume the key press and do nothing else.
+                }
+                if app.success_message.is_some() {
+                    app.success_message = None;
+                    return Ok(());
                 }
 
                 match app.state {
@@ -167,17 +165,13 @@ fn ui_builder(f: &mut Frame, app: &mut App) {
         }
         AppState::Simulation => components::simulation_ui::draw_simulation_ui(f, app, f.area()),
         AppState::Configuring => components::config_ui::draw_config_ui(f, app, f.area()),
-        AppState::LoadCppChampion => {
-            // This state is transient, just show a loading message
-            let loading_text = "Loading C++ Champion...";
-            let paragraph = Paragraph::new(loading_text).alignment(Alignment::Center);
-            f.render_widget(paragraph, f.area());
-        }
         AppState::Exiting => {} // Do nothing, the app will exit
     };
 
     if let Some(msg) = &app.error_message {
-        components::error_popup::draw_error_popup(f, msg, f.area());
+        components::message_popup::draw_message_popup(f, msg, "Error", Color::Red, f.area());
+    } else if let Some(msg) = &app.success_message {
+        components::message_popup::draw_message_popup(f, msg, "Success", Color::Green, f.area());
     }
 }
 

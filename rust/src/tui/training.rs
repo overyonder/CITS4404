@@ -32,6 +32,8 @@ pub struct TrainingState {
 }
 
 impl TrainingState {
+    /// Creates a new `TrainingState` with default values.
+    #[allow(dead_code)]
     pub fn new(config: &Config) -> Self {
         let pop_size = config.population_size;
         let total_matchups = if pop_size > 1 {

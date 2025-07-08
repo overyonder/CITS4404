@@ -45,6 +45,39 @@ pub fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_pong_canvas(f: &mut Frame, sim_state: &SimulationState, area: Rect) {
+    // Calculate proper aspect ratio based on game dimensions
+    let game_width = WIDTH as f64;
+    let game_height = crate::constants::HEIGHT as f64;
+    let game_aspect_ratio = game_width / game_height;
+    
+    // Calculate the maximum size we can use while maintaining aspect ratio
+    let available_width = area.width as f64;
+    let available_height = area.height as f64;
+    let available_aspect_ratio = available_width / available_height;
+    
+    let (canvas_width, canvas_height) = if available_aspect_ratio > game_aspect_ratio {
+        // Available area is wider than game - constrain by height
+        let height = available_height;
+        let width = height * game_aspect_ratio;
+        (width as u16, height as u16)
+    } else {
+        // Available area is taller than game - constrain by width
+        let width = available_width;
+        let height = width / game_aspect_ratio;
+        (width as u16, height as u16)
+    };
+    
+    // Center the canvas in the available area
+    let offset_x = (area.width.saturating_sub(canvas_width)) / 2;
+    let offset_y = (area.height.saturating_sub(canvas_height)) / 2;
+    
+    let canvas_area = Rect {
+        x: area.x + offset_x,
+        y: area.y + offset_y,
+        width: canvas_width,
+        height: canvas_height,
+    };
+
     let canvas = Canvas::default()
         .block(
             Block::default()
@@ -52,21 +85,21 @@ fn draw_pong_canvas(f: &mut Frame, sim_state: &SimulationState, area: Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded),
         )
-        .x_bounds([0.0, WIDTH as f64])
-        .y_bounds([0.0, crate::constants::HEIGHT as f64])
+        .x_bounds([0.0, game_width])
+        .y_bounds([0.0, game_height])
         .paint(|ctx| {
             // Draw paddles
             ctx.draw(&Rectangle {
                 x: 0.0,
                 y: sim_state.game_state.paddle1_pos as f64 - PADDLE_HEIGHT as f64 / 2.0,
-                width: 10.0,
+                width: 2.0,
                 height: PADDLE_HEIGHT as f64,
                 color: Color::White,
             });
             ctx.draw(&Rectangle {
-                x: WIDTH as f64 - 10.0,
+                x: game_width - 2.0,
                 y: sim_state.game_state.paddle2_pos as f64 - PADDLE_HEIGHT as f64 / 2.0,
-                width: 10.0,
+                width: 2.0,
                 height: PADDLE_HEIGHT as f64,
                 color: Color::White,
             });
@@ -82,17 +115,17 @@ fn draw_pong_canvas(f: &mut Frame, sim_state: &SimulationState, area: Rect) {
 
             // Draw scores
             ctx.print(
-                WIDTH as f64 / 4.0,
-                crate::constants::HEIGHT as f64 - 20.0,
+                game_width / 4.0,
+                game_height - 20.0,
                 Line::from(sim_state.game_state.scores.0.to_string()).style(Style::default().fg(Color::Cyan)),
             );
             ctx.print(
-                WIDTH as f64 * 3.0 / 4.0,
-                crate::constants::HEIGHT as f64 - 20.0,
+                game_width * 3.0 / 4.0,
+                game_height - 20.0,
                 Line::from(sim_state.game_state.scores.1.to_string()).style(Style::default().fg(Color::Cyan)),
             );
         });
-    f.render_widget(canvas, area);
+    f.render_widget(canvas, canvas_area);
 }
 
 fn draw_info_panels(f: &mut Frame, sim_state: &SimulationState, area: Rect) {

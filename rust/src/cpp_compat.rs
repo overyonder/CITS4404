@@ -26,15 +26,33 @@ pub fn load_cpp_champion(path: &str) -> Result<(Vec<f32>, Config), Box<dyn std::
     lines.next();
 
     let mut last_champion_weights: Vec<f32> = Vec::new();
+    let mut generation_count = 0u32;
 
     let file_lines: Vec<String> = lines.collect::<Result<_, _>>()?;
 
-    // Find the last line with weights
-    if let Some(last_line_with_weights) = file_lines
-        .iter()
-        .rev()
-        .find(|l| !l.trim().is_empty() && l.split_whitespace().count() > 1)
-    {
+    // Count generations by looking for lines that start with just a number
+    // and find the last line with weights
+    let mut last_line_with_weights = None;
+    
+    for line in &file_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        
+        // Check if this is a generation marker (single number on its own line)
+        if parts.len() == 1 && parts[0].parse::<u32>().is_ok() {
+            generation_count += 1;
+        }
+        // Check if this is a line with weights (multiple numbers)
+        else if parts.len() > 1 && parts.iter().all(|&p| p.parse::<f32>().is_ok()) {
+            last_line_with_weights = Some(line);
+        }
+    }
+
+    if let Some(last_line_with_weights) = last_line_with_weights {
         let weights: Vec<f32> = last_line_with_weights
             .split_whitespace()
             .skip(1) // The first element is the number of weights, so we skip it.
@@ -60,6 +78,7 @@ pub fn load_cpp_champion(path: &str) -> Result<(Vec<f32>, Config), Box<dyn std::
         let cpp_config = Config {
             name: Some("C++ Champion (from fittest.log)".to_string()),
             engine: Engine::Stack, // C++ is most similar to the Stack engine
+            generations: generation_count,
             reproduction_strategy: ReproductionStrategy::CppEquivalent,
             mutation_strategy: MutationStrategy::CppEquivalent,
             fitness_func: FitnessFunc::CppEquivalent,

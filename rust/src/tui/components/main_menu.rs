@@ -1,30 +1,29 @@
 //! The main menu component.
 
 use crate::{
-    config::Config,
+    cpp_compat,
     tui::{
         app::{App, AppState, ModelInfo, SimulationSetupState},
         model_loader,
-        simulation::SimulationState,
     },
 };
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, List, ListItem},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState},
     Frame,
 };
 use std::{fs, io, path::Path};
 
 /// State for the main menu.
 pub struct MainMenu {
-    pub state: ratatui::widgets::ListState,
+    pub state: ListState,
 }
 
 impl Default for MainMenu {
     fn default() -> Self {
-        let mut state = ratatui::widgets::ListState::default();
+        let mut state = ListState::default();
         state.select(Some(0));
         Self { state }
     }
@@ -32,7 +31,7 @@ impl Default for MainMenu {
 
 /// Handles user input on the main menu.
 pub fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
-    let num_items = 5;
+    let num_items = 3;
     match key_code {
         KeyCode::Char('q') | KeyCode::Esc => {
             app.state = AppState::Exiting;
@@ -60,31 +59,12 @@ pub fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
                         app.error_message = None;
                     }
                     1 => {
-                        // "Simulate Last Champion"
-                        if let Some(genome) = app.best_genome.clone() {
-                            // Create a default config for the in-memory champion
-                            let mut champion_config = Config::default();
-                            champion_config.name = Some("Last Trained Champion".to_string());
-
-                            app.simulation = Some(SimulationState::new(
-                                genome.clone(),
-                                genome,
-                                champion_config.clone(),
-                                champion_config,
-                            ));
-                            app.state = AppState::Simulation;
-                        } else {
-                            app.error_message =
-                                Some("No champion available to simulate.".to_string());
-                        }
-                    }
-                    2 => {
-                        // "Simulate from File"
+                        // "Simulate"
                         match load_models_from_dir(Path::new("models")) {
                             Ok(models) => {
                                 if models.is_empty() {
                                     app.error_message = Some(
-                                        "No models found in the 'models' directory.".to_string(),
+                                        "No models found in 'models/'. Train a model first.".to_string(),
                                     );
                                 } else {
                                     app.simulation_setup = Some(SimulationSetupState::new(models));
@@ -97,12 +77,7 @@ pub fn handle_main_menu_input(app: &mut App, key_code: KeyCode) {
                             }
                         }
                     }
-                    3 => {
-                        // "Load C++ Champion"
-                        app.state = AppState::LoadCppChampion;
-                        app.error_message = None;
-                    }
-                    4 => {
+                    2 => {
                         // "Exit"
                         app.state = AppState::Exiting;
                     }
@@ -123,14 +98,29 @@ fn load_models_from_dir(dir: &Path) -> io::Result<Vec<ModelInfo>> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() {
-            if let Ok((_weights, mut config)) = model_loader::load_model_from_file(&path) {
-                // If the model name isn't in the config, use the filename.
-                if config.name.is_none() {
-                    config.name = path.file_stem().map(|s| s.to_string_lossy().to_string());
-                }
-                models.push(ModelInfo { path, config });
+        if !path.is_file() {
+            continue;
+        }
+
+        let is_cpp = path.extension().map_or(false, |ext| ext == "log");
+        if is_cpp {
+            if let Ok((_weights, config)) = cpp_compat::load_cpp_champion(&path.to_string_lossy()) {
+                models.push(ModelInfo {
+                    path,
+                    config,
+                    is_cpp: true,
+                });
             }
+        } else if let Ok((_weights, mut config)) = model_loader::load_model_from_file(&path) {
+            // If the model name isn't in the config, use the filename.
+            if config.name.is_none() {
+                config.name = path.file_stem().map(|s| s.to_string_lossy().to_string());
+            }
+            models.push(ModelInfo {
+                path,
+                config,
+                is_cpp: false,
+            });
         }
     }
     Ok(models)
@@ -140,9 +130,7 @@ fn load_models_from_dir(dir: &Path) -> io::Result<Vec<ModelInfo>> {
 pub fn draw_main_menu(f: &mut Frame, app: &mut App, area: Rect) {
     let items = [
         ListItem::new("Train New Model"),
-        ListItem::new("Simulate Last Champion"),
-        ListItem::new("Simulate from File"),
-        ListItem::new("Load C++ Champion"),
+        ListItem::new("Simulate"),
         ListItem::new("Exit"),
     ];
     let list = List::new(items)

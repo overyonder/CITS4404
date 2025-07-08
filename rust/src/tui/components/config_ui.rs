@@ -1,210 +1,164 @@
-//! The configuration screen component.
+//! The training configuration screen component.
 
 use crate::{
-    config::{Activation, Config, Engine, FitnessFunc, ReproductionStrategy, MutationStrategy},
-    engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
-    population::Population,
-    tui::{
-        app::{App, AppState},
-        training::TrainingState,
-    },
+    config::{Activation, Config, Engine, FitnessFunc, MutationStrategy, ReproductionStrategy},
+    tui::app::{App, AppState},
+    Population,
 };
 use crossterm::event::KeyCode;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, Cell, Row, Table},
     Frame,
 };
 use std::{sync::mpsc, thread};
 
 /// Creates a vector of configuration items for display.
 fn get_config_items(config: &Config) -> Vec<(&'static str, String)> {
-    let mut items = vec![
+    vec![
         ("Engine", config.engine.to_string()),
         ("Generations", config.generations.to_string()),
         ("Population Size", config.population_size.to_string()),
         ("Elite Count", config.elite_count.to_string()),
+        ("Mutation Rate", format!("{:.2}", config.mutation_rate)),
+        (
+            "Mutation Strength",
+            format!("{:.2}", config.mutation_strength),
+        ),
         ("Activation", config.activation.to_string()),
-        ("Mutation Strategy", config.mutation_strategy.to_string()),
-        ("Fitness Func", config.fitness_func.to_string()),
         (
             "Reproduction",
             config.reproduction_strategy.to_string(),
         ),
-    ];
-    
-    // Only show mutation parameters if using Modern strategy
-    if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-        items.insert(5, ("Mutation Rate", format!("{:.2}", config.mutation_rate)));
-        items.insert(6, ("Mutation Strength", format!("{:.2}", config.mutation_strength)));
-    }
-    
-    // Add concurrent setting at the bottom
-    items.push(("Concurrent", config.concurrent.to_string()));
-    
-    items
+        ("Mutation", config.mutation_strategy.to_string()),
+        ("Fitness", config.fitness_func.to_string()),
+        ("Concurrent", config.concurrent.to_string()),
+    ]
 }
 
-/// Draws the UI for the configuration editor.
+/// Draws the UI for configuring a new training session.
 pub fn draw_config_ui(f: &mut Frame, app: &mut App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Title
-            Constraint::Min(0),    // List
-            Constraint::Length(3), // Footer
-        ])
-        .split(area);
-
-    let title = Paragraph::new("Configuration")
-        .block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT));
-    f.render_widget(title, chunks[0]);
-
-    let config_items = get_config_items(&app.config);
-    let items: Vec<ListItem> = config_items
+    let items = get_config_items(&app.config);
+    let rows: Vec<Row> = items
         .iter()
-        .enumerate()
-        .map(|(i, (name, value))| {
-            let style = if i == app.config_editor.selected_index {
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .bg(Color::Blue)
-            } else {
-                Style::default()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{:<20}", name), style),
-                Span::raw(" | "),
-                Span::styled(value.to_string(), style),
-            ]))
+        .map(|(key, value)| {
+            Row::new(vec![
+                Cell::from(*key).style(Style::default().fg(Color::Cyan)),
+                Cell::from(value.clone()),
+            ])
         })
         .collect();
 
-    let list = List::new(items).block(
+    let table = Table::new(
+        rows,
+        &[Constraint::Percentage(50), Constraint::Percentage(50)],
+    )
+    .block(
         Block::default()
-            .borders(Borders::LEFT | Borders::RIGHT)
+            .title("Training Configuration (Use Up/Down to navigate, Left/Right to change, Enter to start, 'q' to go back)")
+            .borders(Borders::ALL)
             .border_type(BorderType::Rounded),
-    );
-    f.render_widget(list, chunks[1]);
+    )
+    .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-    let footer =
-        Paragraph::new("Use Up/Down to navigate, Left/Right to change, Enter to Start, Esc to go back.")
-            .block(Block::default().borders(Borders::ALL));
-    f.render_widget(footer, chunks[2]);
+    f.render_stateful_widget(table, area, &mut app.config_editor.state);
 }
 
 /// Handles user input on the configuration screen.
 pub fn handle_config_input(app: &mut App, key_code: KeyCode) {
     let num_items = get_config_items(&app.config).len();
     match key_code {
-        KeyCode::Up => {
-            app.config_editor.selected_index = app.config_editor.selected_index.saturating_sub(1);
+        KeyCode::Char('q') | KeyCode::Esc => {
+            app.state = AppState::MainMenu;
         }
         KeyCode::Down => {
-            if app.config_editor.selected_index < num_items - 1 {
-                app.config_editor.selected_index += 1;
-            }
+            let next_index = (app.config_editor.state.selected().unwrap_or(0) + 1) % num_items;
+            app.config_editor.state.select(Some(next_index));
         }
-        KeyCode::Left => change_config_value(app, false),
-        KeyCode::Right => change_config_value(app, true),
-        KeyCode::Enter => start_training(app),
-        KeyCode::Esc | KeyCode::Char('q') => {
-            app.state = AppState::MainMenu;
+        KeyCode::Up => {
+            let prev_index = (app.config_editor.state.selected().unwrap_or(0) + num_items - 1)
+                % num_items;
+            app.config_editor.state.select(Some(prev_index));
+        }
+        KeyCode::Left => {
+            change_config_value(app, false);
+        }
+        KeyCode::Right => {
+            change_config_value(app, true);
+        }
+        KeyCode::Enter => {
+            // Start Training
+            let (tx, rx) = mpsc::channel();
+            app.tx = Some(tx.clone());
+            app.rx = Some(rx);
+
+            let training_config = app.config.clone();
+            let handle = thread::spawn(move || {
+                macro_rules! run_evolution_for_engine {
+                    ($individual_type:ty, $config:expr, $sender:expr) => {{
+                        let mut pop: Population<$individual_type> = Population::new($config);
+                        pop.evolve(Some($sender));
+                    }};
+                }
+                match training_config.engine {
+                    Engine::Stack => {
+                        run_evolution_for_engine!(
+                            crate::engines::StackIndividual,
+                            training_config,
+                            tx.clone()
+                        )
+                    }
+                    Engine::Heap => {
+                        run_evolution_for_engine!(
+                            crate::engines::HeapIndividual,
+                            training_config,
+                            tx.clone()
+                        )
+                    }
+                    Engine::Simd => {
+                        run_evolution_for_engine!(
+                            crate::engines::SimdIndividual,
+                            training_config,
+                            tx.clone()
+                        )
+                    }
+                    Engine::Gpu => {
+                        run_evolution_for_engine!(crate::engines::GpuIndividual, training_config, tx.clone())
+                    }
+                }
+                // After evolution is done, send the finished signal.
+                if tx.send(crate::tui::training::TrainingMessage::Finished).is_err() {
+                    // The UI has likely been closed, so we don't need to log an error.
+                }
+            });
+            app.training_thread = Some(handle);
+            app.state = AppState::Training;
         }
         _ => {}
     }
 }
 
-/// Starts the training process in a background thread.
-fn start_training(app: &mut App) {
-    // Create a channel for the training thread to send updates to the UI thread.
-    let (tx, rx) = mpsc::channel();
-    app.tx = Some(tx);
-    app.rx = Some(rx);
-
-    // Initialize the training state.
-    app.training = Some(TrainingState::new(&app.config));
-    app.state = AppState::Training;
-
-    // Clone the necessary data to move into the training thread.
-    let config = app.config.clone();
-    // Clone the Option<Sender>. This is cheap, avoids unwrapping, and is safer.
-    let tx_option = app.tx.clone();
-
-    // Spawn the training thread.
-    thread::spawn(move || {
-        // This macro reduces code duplication for running evolution with different
-        // individual types (engines).
-        macro_rules! run_evolution {
-            ($individual_type:ty, $config:expr) => {{
-                let mut pop: Population<$individual_type> = Population::new($config.clone());
-                // The `evolve` function takes an `Option<Sender<TrainingMessage>>`.
-                // We clone the Option for each potential call within the macro expansion.
-                let _best_individual = pop.evolve(tx_option.clone());
-            }};
-        }
-
-        // Dispatch to the correct engine type.
-        match config.engine {
-            Engine::Stack => run_evolution!(StackIndividual, config),
-            Engine::Heap => run_evolution!(HeapIndividual, config),
-            Engine::Simd => run_evolution!(SimdIndividual, config),
-            Engine::Gpu => run_evolution!(GpuIndividual, config),
-        };
-    });
-}
-
 /// Helper function to modify a configuration value based on the selected index.
 fn change_config_value(app: &mut App, increase: bool) {
     let config = &mut app.config;
-    let selected_index = app.config_editor.selected_index;
-    
-    // Map the selected index to the actual config item
-    let actual_index = if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-        // With mutation parameters shown
-        selected_index
-    } else {
-        // Without mutation parameters, adjust indices
-        match selected_index {
-            0..=4 => selected_index, // Engine, Generations, Population, Elite, Activation
-            5 => 6, // Mutation Strategy (was 6)
-            6 => 7, // Fitness Func (was 7)
-            7 => 8, // Reproduction (was 8)
-            8 => 9, // Concurrent (was 9)
-            _ => selected_index,
-        }
-    };
-    
-    match actual_index {
+    match app.config_editor.state.selected().unwrap_or(0) {
         0 => {
             // Engine
-            let current_engine_index = match config.engine {
-                Engine::Stack => 0,
-                Engine::Heap => 1,
-                Engine::Simd => 2,
-                Engine::Gpu => 3,
-            };
-            let next_index = if increase {
-                (current_engine_index + 1) % 4
-            } else {
-                (current_engine_index + 3) % 4
-            };
-            config.engine = match next_index {
-                0 => Engine::Stack,
-                1 => Engine::Heap,
-                2 => Engine::Simd,
-                _ => Engine::Gpu,
+            config.engine = match config.engine {
+                Engine::Stack => if increase { Engine::Heap } else { Engine::Gpu },
+                Engine::Heap => if increase { Engine::Simd } else { Engine::Stack },
+                Engine::Simd => if increase { Engine::Gpu } else { Engine::Heap },
+                Engine::Gpu => if increase { Engine::Stack } else { Engine::Simd },
             };
         }
         1 => {
             // Generations
-            let step = 10;
+            let step = 50;
             if increase {
                 config.generations += step;
             } else {
-                config.generations = config.generations.saturating_sub(step);
+                config.generations = config.generations.saturating_sub(step).max(10);
             }
         }
         2 => {
@@ -213,7 +167,7 @@ fn change_config_value(app: &mut App, increase: bool) {
             if increase {
                 config.population_size += step;
             } else {
-                config.population_size = config.population_size.saturating_sub(step);
+                config.population_size = config.population_size.saturating_sub(step).max(10);
             }
         }
         3 => {
@@ -221,137 +175,63 @@ fn change_config_value(app: &mut App, increase: bool) {
             if increase {
                 config.elite_count += 1;
             } else {
-                config.elite_count = config.elite_count.saturating_sub(1);
+                config.elite_count = config.elite_count.saturating_sub(1).max(1);
             }
         }
         4 => {
-            // Activation
-            let current_activation_index = match config.activation {
-                Activation::ClampedLinear => 0,
-                Activation::Tanh => 1,
-                Activation::Relu => 2,
-                Activation::Atan => 3,
-                Activation::Linear => 4,
-                Activation::Sigmoid => 5,
-            };
-            let next_index = if increase {
-                (current_activation_index + 1) % 6
+            // Mutation Rate
+            let step = 0.01;
+            if increase {
+                config.mutation_rate = (config.mutation_rate + step).min(1.0);
             } else {
-                (current_activation_index + 5) % 6
-            };
-            config.activation = match next_index {
-                0 => Activation::ClampedLinear,
-                1 => Activation::Tanh,
-                2 => Activation::Relu,
-                3 => Activation::Atan,
-                4 => Activation::Linear,
-                5 => Activation::Sigmoid,
-                _ => Activation::default(),
-            };
+                config.mutation_rate = (config.mutation_rate - step).max(0.0);
+            }
         }
         5 => {
-            // Mutation Rate (only shown for Modern strategy)
-            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-                let step = 0.01;
-                if increase {
-                    config.mutation_rate += step;
-                } else {
-                    config.mutation_rate = (config.mutation_rate - step).max(0.0);
-                }
+            // Mutation Strength
+            let step = 0.05;
+            if increase {
+                config.mutation_strength = (config.mutation_strength + step).min(2.0);
             } else {
-                // Mutation Strategy
-                config.mutation_strategy = match config.mutation_strategy {
-                    MutationStrategy::CppEquivalent => MutationStrategy::Modern,
-                    MutationStrategy::Modern => MutationStrategy::CppEquivalent,
-                };
+                config.mutation_strength = (config.mutation_strength - step).max(0.0);
             }
         }
         6 => {
-            // Mutation Strength (only shown for Modern strategy)
-            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-                let step = 0.01;
-                if increase {
-                    config.mutation_strength += step;
-                } else {
-                    config.mutation_strength = (config.mutation_strength - step).max(0.0);
-                }
-            } else {
-                // Mutation Strategy (when not showing mutation params)
-                config.mutation_strategy = match config.mutation_strategy {
-                    MutationStrategy::CppEquivalent => MutationStrategy::Modern,
-                    MutationStrategy::Modern => MutationStrategy::CppEquivalent,
-                };
-            }
+            // Activation
+            config.activation = match config.activation {
+                Activation::ClampedLinear => if increase { Activation::Tanh } else { Activation::Linear },
+                Activation::Tanh => if increase { Activation::Relu } else { Activation::ClampedLinear },
+                Activation::Relu => if increase { Activation::Atan } else { Activation::Tanh },
+                Activation::Atan => if increase { Activation::Sigmoid } else { Activation::Relu },
+                Activation::Sigmoid => if increase { Activation::Linear } else { Activation::Atan },
+                Activation::Linear => if increase { Activation::ClampedLinear } else { Activation::Sigmoid },
+            };
         }
         7 => {
-            // Mutation Strategy (when showing mutation params) or Fitness Function
-            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-                config.mutation_strategy = match config.mutation_strategy {
-                    MutationStrategy::CppEquivalent => MutationStrategy::Modern,
-                    MutationStrategy::Modern => MutationStrategy::CppEquivalent,
-                };
-            } else {
-                // Fitness Function
-                let current_fitness_index = match config.fitness_func {
-                    FitnessFunc::CppEquivalent => 0,
-                    FitnessFunc::Balanced => 1,
-                    FitnessFunc::Performance => 2,
-                };
-                let next_index = if increase {
-                    (current_fitness_index + 1) % 3
-                } else {
-                    (current_fitness_index + 2) % 3
-                };
-                config.fitness_func = match next_index {
-                    0 => FitnessFunc::CppEquivalent,
-                    1 => FitnessFunc::Balanced,
-                    _ => FitnessFunc::Performance,
-                };
+            // Reproduction Strategy
+            config.reproduction_strategy = match config.reproduction_strategy {
+                ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
+                ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
             }
         }
         8 => {
-            // Fitness Function (when showing mutation params) or Reproduction
-            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-                let current_fitness_index = match config.fitness_func {
-                    FitnessFunc::CppEquivalent => 0,
-                    FitnessFunc::Balanced => 1,
-                    FitnessFunc::Performance => 2,
-                };
-                let next_index = if increase {
-                    (current_fitness_index + 1) % 3
-                } else {
-                    (current_fitness_index + 2) % 3
-                };
-                config.fitness_func = match next_index {
-                    0 => FitnessFunc::CppEquivalent,
-                    1 => FitnessFunc::Balanced,
-                    _ => FitnessFunc::Performance,
-                };
-            } else {
-                // Reproduction Strategy
-                config.reproduction_strategy = match config.reproduction_strategy {
-                    ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
-                    ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
-                };
+            // Mutation Strategy
+            config.mutation_strategy = match config.mutation_strategy {
+                MutationStrategy::CppEquivalent => MutationStrategy::Modern,
+                MutationStrategy::Modern => MutationStrategy::CppEquivalent,
             }
         }
         9 => {
-            // Reproduction Strategy (when showing mutation params) or Concurrent
-            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-                config.reproduction_strategy = match config.reproduction_strategy {
-                    ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
-                    ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
-                };
-            } else {
-                // Concurrent
-                config.concurrent = !config.concurrent;
+            // Fitness Function
+            config.fitness_func = match config.fitness_func {
+                FitnessFunc::CppEquivalent => if increase { FitnessFunc::Balanced } else { FitnessFunc::Performance },
+                FitnessFunc::Balanced => if increase { FitnessFunc::Performance } else { FitnessFunc::CppEquivalent },
+                FitnessFunc::Performance => if increase { FitnessFunc::CppEquivalent } else { FitnessFunc::Balanced },
             }
         }
         10 => {
-            // Concurrent (when showing mutation params)
-            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
-                config.concurrent = !config.concurrent;
-            }
+            // Concurrent
+            config.concurrent = !config.concurrent;
         }
         _ => {}
     }
