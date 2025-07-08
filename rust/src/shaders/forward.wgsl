@@ -8,7 +8,7 @@
 
 // Uniforms for configuration
 struct Config {
-    // 0: Tanh, 1: ReLU, 2: Atan, 3: Linear, 4: Sigmoid
+    // 0: ClampedLinear, 1: Tanh, 2: ReLU, 3: Atan, 4: Linear, 5: Sigmoid
     activation_type: u32,
 };
 @group(0) @binding(3) var<uniform> config: Config;
@@ -28,24 +28,28 @@ const L2_WEIGHTS: u32 = L2_SIZE * L1_SIZE_WITH_BIAS;
 /// Applies the selected activation function.
 fn apply_activation(val: f32) -> f32 {
     switch config.activation_type {
-        // Tanh
+        // ClampedLinear
         case 0u: {
+            return clamp(val, -1.0, 1.0);
+        }
+        // Tanh
+        case 1u: {
             return tanh(val);
         }
         // ReLU
-        case 1u: {
+        case 2u: {
             return max(val, 0.0);
         }
         // Atan
-        case 2u: {
+        case 3u: {
             return atan(val);
         }
         // Linear
-        case 3u: {
+        case 4u: {
             return val;
         }
         // Sigmoid
-        case 4u: {
+        case 5u: {
             return 1.0 / (1.0 + exp(-val));
         }
         // Default to linear

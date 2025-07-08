@@ -10,7 +10,7 @@ mod utils;
 
 use crate::traits::Individual;
 use crate::{
-    config::{Activation, Config, Engine, FitnessFunc},
+    config::{Activation, Config, Engine, FitnessFunc, MutationStrategy},
     engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
     population::Population,
     tui::ui::run_app,
@@ -67,6 +67,10 @@ struct Args {
     /// The activation function to use in the neural network's hidden layers.
     #[arg(long)]
     activation: Option<String>,
+
+    /// The mutation strategy to use for evolution.
+    #[arg(long, value_enum, default_value_t = Config::default().mutation_strategy)]
+    mutation_strategy: MutationStrategy,
 
     /// The fitness function to use for evolution.
     #[arg(long, value_enum, default_value_t = Config::default().fitness_func)]
@@ -138,12 +142,14 @@ fn run_cli(args: Args) {
         elite_count: args.elite_count,
         mutation_rate: args.mutation_rate,
         mutation_strength: args.mutation_strength,
+        mutation_strategy: args.mutation_strategy,
         fitness_func: args.fitness_func,
         ..Default::default()
     };
 
     if let Some(ref act) = args.activation {
         config.activation = match act.to_lowercase().as_str() {
+            "clampedlinear" | "clamped_linear" | "clamped-linear" => Activation::ClampedLinear,
             "tanh" => Activation::Tanh,
             "relu" => Activation::Relu,
             "atan" => Activation::Atan,

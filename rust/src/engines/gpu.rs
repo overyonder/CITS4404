@@ -186,11 +186,12 @@ impl Individual for GpuIndividual<'_> {
         // Update input and config buffers with new data for this pass.
         let config_data = GpuConfig {
             activation_type: match activation {
-                Activation::Tanh => 0,
-                Activation::Relu => 1,
-                Activation::Atan => 2,
-                Activation::Linear => 3,
-                Activation::Sigmoid => 4,
+                Activation::ClampedLinear => 0,
+                Activation::Tanh => 1,
+                Activation::Relu => 2,
+                Activation::Atan => 3,
+                Activation::Linear => 4,
+                Activation::Sigmoid => 5,
             },
         };
         queue.write_buffer(&self.input_buffer, 0, bytemuck::cast_slice(input));

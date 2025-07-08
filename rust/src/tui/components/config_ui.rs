@@ -1,7 +1,7 @@
 //! The configuration screen component.
 
 use crate::{
-    config::{Activation, Config, Engine, FitnessFunc, ReproductionStrategy},
+    config::{Activation, Config, Engine, FitnessFunc, ReproductionStrategy, MutationStrategy},
     engines::{GpuIndividual, HeapIndividual, SimdIndividual, StackIndividual},
     population::Population,
     tui::{
@@ -32,6 +32,7 @@ fn get_config_items(config: &Config) -> Vec<(&'static str, String)> {
             format!("{:.2}", config.mutation_strength),
         ),
         ("Activation", config.activation.to_string()),
+        ("Mutation Strategy", config.mutation_strategy.to_string()),
         ("Concurrent", config.concurrent.to_string()),
         ("Fitness Func", config.fitness_func.to_string()),
         (
@@ -221,31 +222,40 @@ fn change_config_value(app: &mut App, increase: bool) {
         6 => {
             // Activation
             let current_activation_index = match config.activation {
-                Activation::Tanh => 0,
-                Activation::Relu => 1,
-                Activation::Atan => 2,
-                Activation::Linear => 3,
-                Activation::Sigmoid => 4,
+                Activation::ClampedLinear => 0,
+                Activation::Tanh => 1,
+                Activation::Relu => 2,
+                Activation::Atan => 3,
+                Activation::Linear => 4,
+                Activation::Sigmoid => 5,
             };
             let next_index = if increase {
-                (current_activation_index + 1) % 5
+                (current_activation_index + 1) % 6
             } else {
-                (current_activation_index + 4) % 5
+                (current_activation_index + 5) % 6
             };
             config.activation = match next_index {
-                0 => Activation::Tanh,
-                1 => Activation::Relu,
-                2 => Activation::Atan,
-                3 => Activation::Linear,
-                4 => Activation::Sigmoid,
+                0 => Activation::ClampedLinear,
+                1 => Activation::Tanh,
+                2 => Activation::Relu,
+                3 => Activation::Atan,
+                4 => Activation::Linear,
+                5 => Activation::Sigmoid,
                 _ => Activation::default(),
             };
         }
         7 => {
+            // Mutation Strategy
+            config.mutation_strategy = match config.mutation_strategy {
+                MutationStrategy::CppEquivalent => MutationStrategy::Modern,
+                MutationStrategy::Modern => MutationStrategy::CppEquivalent,
+            };
+        }
+        8 => {
             // Concurrent
             config.concurrent = !config.concurrent;
         }
-        8 => {
+        9 => {
             // Fitness Function
             let current_fitness_index = match config.fitness_func {
                 FitnessFunc::CppEquivalent => 0,
@@ -263,7 +273,7 @@ fn change_config_value(app: &mut App, increase: bool) {
                 _ => FitnessFunc::Performance,
             };
         }
-        9 => {
+        10 => {
             // Reproduction Strategy
             config.reproduction_strategy = match config.reproduction_strategy {
                 ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,

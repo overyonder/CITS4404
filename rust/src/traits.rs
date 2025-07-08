@@ -60,16 +60,27 @@ pub trait Individual: Default + Clone + Send + Sync {
     ///
     /// # Teaching Note
     /// Mutation introduces new genetic material into the population, preventing premature
-    /// convergence and exploring new areas of the solution space. This function iterates
-    /// through each weight and applies mutation based on two key parameters:
-    /// - `mutation_rate`: The probability that any single weight will be mutated.
-    /// - `mutation_strength`: The maximum amount by which a weight can be changed.
-    /// Tuning these values is critical to the success of a genetic algorithm.
+    /// convergence and exploring new areas of the solution space. This function supports
+    /// two strategies:
+    /// - **C++ Equivalent**: Mutates exactly one randomly selected gene with normal distribution N(0, 1)
+    /// - **Modern**: Mutates multiple genes based on rate and strength parameters
     fn mutate<R: Rng>(&mut self, rng: &mut R, config: &Config) {
         let weights = self.weights_as_mut_slice();
-        for i in 0..TOTAL_WEIGHTS {
-            if rng.random::<f32>() < config.mutation_rate {
-                weights[i] += rng.random_range(-1.0..=1.0) * config.mutation_strength;
+        
+        match config.mutation_strategy {
+            crate::config::MutationStrategy::CppEquivalent => {
+                // C++ equivalent: mutate exactly one randomly selected gene with N(0, 1)
+                let gene_index = rng.random_range(0..TOTAL_WEIGHTS);
+                let mutation = rng.random_range(-1.0..=1.0); // Normal distribution approximation
+                weights[gene_index] += mutation;
+            }
+            crate::config::MutationStrategy::Modern => {
+                // Modern: mutate multiple genes based on rate and strength
+                for i in 0..TOTAL_WEIGHTS {
+                    if rng.random::<f32>() < config.mutation_rate {
+                        weights[i] += rng.random_range(-1.0..=1.0) * config.mutation_strength;
+                    }
+                }
             }
         }
     }

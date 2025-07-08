@@ -343,6 +343,7 @@ fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let activation_color = match app.config.activation {
+        crate::config::Activation::ClampedLinear => Color::Rgb(128, 128, 128), // Gray
         crate::config::Activation::Tanh => Color::Cyan,
         crate::config::Activation::Relu => Color::Green,
         crate::config::Activation::Atan => Color::Yellow,

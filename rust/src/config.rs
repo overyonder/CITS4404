@@ -124,6 +124,8 @@ pub struct Config {
     pub date_trained: Option<DateTime<Utc>>,
     /// The strategy for creating a new generation from the old one.
     pub reproduction_strategy: ReproductionStrategy,
+    /// The strategy for mutating individuals during evolution.
+    pub mutation_strategy: MutationStrategy,
 }
 
 /// Provides a default, sensible configuration for the evolutionary algorithm.
@@ -140,12 +142,13 @@ impl Default for Config {
             mutation_strength: 0.1, // C++ default: Mutate by up to +/- 10%
             engine: Engine::default(),
             concurrent: false,
-            activation: Activation::Tanh, // C++ default
+            activation: Activation::ClampedLinear, // C++ default
             population_size: 128,     // C++ default
             elite_count: 2,           // Used by Modern strategy, C++ calculates it
             fitness_func: FitnessFunc::CppEquivalent, // C++ default
             date_trained: None,
             reproduction_strategy: ReproductionStrategy::default(), // C++ default
+            mutation_strategy: MutationStrategy::default(), // C++ default
         }
     }
 }
@@ -158,9 +161,11 @@ impl Default for Config {
 /// compared, which is useful in the TUI for showing the selected item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Activation {
-        /// **Hyperbolic Tangent:** A smooth, zero-centered function that squashes values to `[-1, 1]`.
+    /// **Clamped Linear:** A linear function that clamps values to `[-1, 1]`.
     /// This is the C++ equivalent activation function.
     #[default]
+    ClampedLinear,
+    /// **Hyperbolic Tangent:** A smooth, zero-centered function that squashes values to `[-1, 1]`.
     Tanh,
     /// **Rectified Linear Unit:** Outputs `max(0, x)`. It's computationally very efficient
     /// and helps with the vanishing gradient problem, but it's not zero-centered.
@@ -179,6 +184,7 @@ pub enum Activation {
 impl fmt::Display for Activation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Activation::ClampedLinear => write!(f, "Clamped Linear"),
             Activation::Tanh => write!(f, "Tanh"),
             Activation::Relu => write!(f, "ReLU"),
             Activation::Atan => write!(f, "Atan"),
@@ -208,6 +214,27 @@ impl fmt::Display for ReproductionStrategy {
         match self {
             ReproductionStrategy::CppEquivalent => write!(f, "C++ Equivalent"),
             ReproductionStrategy::Modern => write!(f, "Modern"),
+        }
+    }
+}
+
+/// Selects the mutation strategy for the evolutionary algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+pub enum MutationStrategy {
+    /// **C++ Equivalent:** Mutates exactly one randomly selected gene with normal distribution N(0, 1).
+    /// This matches the original C++ implementation exactly.
+    #[default]
+    CppEquivalent,
+    /// **Modern:** Mutates multiple genes based on mutation_rate and mutation_strength parameters.
+    /// This provides more fine-grained control over the mutation process.
+    Modern,
+}
+
+impl fmt::Display for MutationStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MutationStrategy::CppEquivalent => write!(f, "C++ Equivalent"),
+            MutationStrategy::Modern => write!(f, "Modern"),
         }
     }
 }

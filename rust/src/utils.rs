@@ -12,6 +12,7 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
 
 pub fn apply_activation(x: f32, activation: Activation) -> f32 {
     match activation {
+        Activation::ClampedLinear => x.clamp(-1.0, 1.0),
         Activation::Tanh => x.tanh(),
         Activation::Relu => x.max(0.0),
         Activation::Atan => x.atan(),
