@@ -88,30 +88,42 @@ fn draw_pong_canvas(f: &mut Frame, sim_state: &SimulationState, area: Rect) {
         .x_bounds([0.0, game_width])
         .y_bounds([0.0, game_height])
         .paint(|ctx| {
-            // Draw paddles
+            // Draw paddles with consistent 4.0 width (approximately 2 braille pips thick)
             ctx.draw(&Rectangle {
-                x: 0.0,
+                x: 2.0,  // Left paddle: 2 units from left edge
                 y: sim_state.game_state.paddle1_pos as f64 - PADDLE_HEIGHT as f64 / 2.0,
-                width: 2.0,
+                width: 4.0,
                 height: PADDLE_HEIGHT as f64,
                 color: Color::White,
             });
             ctx.draw(&Rectangle {
-                x: game_width - 2.0,
+                x: game_width - 6.0,  // Right paddle: 2 units from right edge (so it's 6 units from right to account for 4.0 width)
                 y: sim_state.game_state.paddle2_pos as f64 - PADDLE_HEIGHT as f64 / 2.0,
-                width: 2.0,
+                width: 4.0,
                 height: PADDLE_HEIGHT as f64,
                 color: Color::White,
             });
 
-            // Draw ball
-            ctx.draw(&Rectangle {
-                x: sim_state.game_state.ball_pos.0 as f64,
-                y: sim_state.game_state.ball_pos.1 as f64,
-                width: 5.0,
-                height: 5.0,
-                color: Color::Yellow,
-            });
+            // Draw ball as a filled circle using multiple rectangles
+            let ball_x = sim_state.game_state.ball_pos.0 as f64;
+            let ball_y = sim_state.game_state.ball_pos.1 as f64;
+            let radius = 2.0;
+            
+            // Draw a filled circle pattern
+            for dx in -2..=2 {
+                for dy in -2..=2 {
+                    let distance = ((dx * dx + dy * dy) as f64).sqrt();
+                    if distance <= radius {
+                        ctx.draw(&Rectangle {
+                            x: ball_x + dx as f64,
+                            y: ball_y + dy as f64,
+                            width: 1.0,
+                            height: 1.0,
+                            color: Color::Yellow,
+                        });
+                    }
+                }
+            }
 
             // Draw scores
             ctx.print(

@@ -53,8 +53,9 @@ impl SimulationState {
 
         // Update paddle velocities based on network outputs.
         // The output is in the range [-1, 1], which we scale by the max paddle velocity constant.
+        // Note: Right paddle output is negated to match C++ version behavior
         self.game_state.paddle1_vel = p1_outputs[0] * PADDLE_MAX_VEL;
-        self.game_state.paddle2_vel = p2_outputs[0] * PADDLE_MAX_VEL;
+        self.game_state.paddle2_vel = -p2_outputs[0] * PADDLE_MAX_VEL;
 
         // Advance the game state by one frame.
         self.game_state.advance_frame();

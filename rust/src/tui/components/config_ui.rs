@@ -93,6 +93,9 @@ pub fn handle_config_input(app: &mut App, key_code: KeyCode) {
             app.tx = Some(tx.clone());
             app.rx = Some(rx);
 
+            // Initialize training state
+            app.training = Some(crate::tui::training::TrainingState::new(&app.config));
+
             let training_config = app.config.clone();
             let handle = thread::spawn(move || {
                 macro_rules! run_evolution_for_engine {

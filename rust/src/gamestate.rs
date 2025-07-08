@@ -97,21 +97,18 @@ impl GameState {
     ///
     /// # Teaching Note
     /// To allow a single neural network to control both paddles, we can reuse the same
-    /// network by simply flipping its perspective of the world. This is a common and
-    /// powerful technique in symmetric games. The transformation is as follows:
-    /// - The ball's X position is inverted (`WIDTH - x`).
-    /// - The ball's X velocity is inverted (`-vx`).
-    /// - The roles of the paddles are swapped (paddle2 becomes 'own', paddle1 becomes 'opponent').
+    /// network by simply flipping its perspective of the world. This matches the C++ version
+    /// exactly where ALL inputs are negated for the right player.
     pub fn get_inputs_for_player2(&self) -> [f32; 8] {
         [
-            (2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0, // Own Paddle Y (was paddle2)
-            self.paddle2_vel / PADDLE_MAX_VEL,              // Own Paddle Vel Y
-            (2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0, // Opponent Paddle Y (was paddle1)
-            self.paddle1_vel / PADDLE_MAX_VEL,              // Opponent Paddle Vel Y
-            -((2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0), // Inverted Ball X
-            (2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0,  // Ball Y
-            -self.ball_vel.0 / (2.0 * BALL_INITIAL_VEL_X),  // Inverted Ball Vel X
-            self.ball_vel.1 / (2.0 * BALL_INITIAL_VEL_Y),   // Ball Vel Y
+            -((2.0 * self.paddle2_pos / HEIGHT as f32) - 1.0), // Own Paddle Y (negated)
+            -self.paddle2_vel / PADDLE_MAX_VEL,                 // Own Paddle Vel Y (negated)
+            -((2.0 * self.paddle1_pos / HEIGHT as f32) - 1.0), // Opponent Paddle Y (negated)
+            -self.paddle1_vel / PADDLE_MAX_VEL,                 // Opponent Paddle Vel Y (negated)
+            -((2.0 * self.ball_pos.0 / WIDTH as f32) - 1.0),   // Ball X (negated)
+            -((2.0 * self.ball_pos.1 / HEIGHT as f32) - 1.0),  // Ball Y (negated)
+            -self.ball_vel.0 / (2.0 * BALL_INITIAL_VEL_X),     // Ball Vel X (negated)
+            -self.ball_vel.1 / (2.0 * BALL_INITIAL_VEL_Y),     // Ball Vel Y (negated)
         ]
     }
 
@@ -151,9 +148,10 @@ impl GameState {
         let right_output = right.forward_propagate(&right_inputs, config.activation);
 
         // Set velocities based on net output, clamped to the maximum paddle speed.
+        // Note: Right paddle output is negated to match C++ version behavior
         self.paddle1_vel = (left_output[0] * PADDLE_MAX_VEL).clamp(-PADDLE_MAX_VEL, PADDLE_MAX_VEL);
         self.paddle2_vel =
-            (right_output[0] * PADDLE_MAX_VEL).clamp(-PADDLE_MAX_VEL, PADDLE_MAX_VEL);
+            (-right_output[0] * PADDLE_MAX_VEL).clamp(-PADDLE_MAX_VEL, PADDLE_MAX_VEL);
     }
 
     /// Advances the game state by one frame, applying physics and handling collisions.

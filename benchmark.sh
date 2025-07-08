@@ -18,7 +18,7 @@ GENERATIONS=10
 RUST_BIN="rust/target/release/pong"
 CPP_DIR="C++"
 CPP_BIN_NAME="pong_evolution"
-CPP_BIN_PATH="$CPP_DIR/$CPP_BIN_NAME"
+CPP_BIN_PATH="$CPP_DIR/bin/$CPP_BIN_NAME"
 
 # --- Rust Build & Benchmarks ---
 echo "--- Building Rust Project ---"
@@ -34,14 +34,14 @@ echo "--- Benchmarking Rust Engines (Generations: $GENERATIONS) ---"
 echo "--- Single-threaded Engines ---"
 for engine in "${BASE_ENGINES[@]}"; do
     echo "Benchmarking Rust engine: $engine (single-threaded)"
-    hyperfine -w 2 -r 10 "$RUST_BIN --nogui --engine $engine --generations $GENERATIONS"
+    hyperfine -w 2 -r 10 "$RUST_BIN --engine $engine --generations $GENERATIONS"
 done
 
 echo ""
 echo "--- Concurrent Engines ---"
 for engine in "${CONCURRENT_ENGINES[@]}"; do
     echo "Benchmarking Rust engine: $engine (concurrent)"
-    hyperfine -w 2 -r 10 "$RUST_BIN --nogui --engine $engine --generations $GENERATIONS --concurrent"
+    hyperfine -w 2 -r 10 "$RUST_BIN --engine $engine --generations $GENERATIONS --concurrent"
 done
 echo ""
 
