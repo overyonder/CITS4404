@@ -47,7 +47,7 @@ const PARAMETER_INFO: &[ParameterInfo] = &[
     ParameterInfo {
         name: "Population Size",
         description: "Number of individuals in each generation",
-        valid_range: "10-1000",
+        valid_range: "10-8000",
         educational_note: "Larger populations explore more solutions but require more computation. 50-200 works well for most problems.",
     },
     ParameterInfo {
@@ -176,7 +176,7 @@ fn validate_config(config: &Config) -> Vec<String> {
     if config.population_size < 10 {
         issues.push("Population size too small (minimum 10)".to_string());
     }
-    if config.population_size > 1000 {
+    if config.population_size > 8000 {
         issues.push("Population size very large (will be slow)".to_string());
     }
     
@@ -515,7 +515,7 @@ fn change_config_value(app: &mut App, increase: bool) {
             "Population Size" => {
                 let step = if config.population_size < 50 { 5 } else { 10 };
                 if increase {
-                    config.population_size = (config.population_size + step).min(1000);
+                    config.population_size = (config.population_size + step).min(8000);
                 } else {
                     config.population_size = config.population_size.saturating_sub(step).max(10);
                 }
