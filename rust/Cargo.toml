@@ -32,3 +32,16 @@ chrono = { version = "0.4.41", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3.10.1"
+
+# Custom profiles for auto-vectorization control
+# Usage: cargo run --profile no-simd
+[profile.no-simd]
+inherits = "release"
+
+# Usage: cargo run --profile max-simd  
+[profile.max-simd]
+inherits = "release"
+
+# Windows batch files for RUSTFLAGS control:
+# no-simd.bat:  set RUSTFLAGS=-C target-feature=-sse,-sse2,-avx,-avx2 && cargo run --release
+# max-simd.bat: set RUSTFLAGS=-C target-feature=+sse,+sse2,+avx,+avx2 -C target-cpu=native && cargo run --release

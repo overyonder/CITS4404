@@ -24,12 +24,7 @@ pub enum AppState {
     Exiting,
 }
 
-/// Represents the different tabs available in the Training view.
-#[derive(Clone, Copy, Debug)]
-pub enum Tab {
-    Generations = 0,
-    Matchups = 1,
-}
+
 
 /// Holds metadata for a single, loadable simulation model.
 #[derive(Clone)]
@@ -146,8 +141,6 @@ pub struct App {
     pub simulation_setup: Option<SimulationSetupState>,
     /// The best genome discovered so far, to be used in simulation.
     pub best_genome: Option<Vec<f32>>,
-    /// The active tab in the training view.
-    pub active_tab: Tab,
     pub training_thread: Option<thread::JoinHandle<()>>,
     pub tx: Option<Sender<TrainingMessage>>,
     pub rx: Option<Receiver<TrainingMessage>>,
@@ -167,18 +160,11 @@ impl App {
             simulation: None,
             simulation_setup: None,
             best_genome: None,
-            active_tab: Tab::Generations,
             training_thread: None,
             tx: None,
             rx: None,
         }
     }
 
-    /// Cycles through the tabs in the training view.
-    pub fn next_tab(&mut self) {
-        self.active_tab = match self.active_tab {
-            Tab::Generations => Tab::Matchups,
-            Tab::Matchups => Tab::Generations,
-        };
-    }
+
 }

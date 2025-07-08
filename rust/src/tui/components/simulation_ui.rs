@@ -10,7 +10,7 @@ use crate::{
 };
 use crossterm::event::KeyCode;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
@@ -36,11 +36,16 @@ pub fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(sim_state) = &app.simulation {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(8)]) // Canvas and Info
+            .constraints([
+                Constraint::Min(0),       // Canvas
+                Constraint::Length(6),    // Info panels
+                Constraint::Length(6),    // Genome visualizations
+            ])
             .split(area);
 
         draw_pong_canvas(f, sim_state, chunks[0]);
         draw_info_panels(f, sim_state, chunks[1]);
+        draw_genome_panels(f, sim_state, chunks[2]);
     }
 }
 
@@ -88,18 +93,18 @@ fn draw_pong_canvas(f: &mut Frame, sim_state: &SimulationState, area: Rect) {
         .x_bounds([0.0, game_width])
         .y_bounds([0.0, game_height])
         .paint(|ctx| {
-            // Draw paddles with consistent 4.0 width (approximately 2 braille pips thick)
+            // Draw paddles at field edges where collision detection expects them
             ctx.draw(&Rectangle {
-                x: 2.0,  // Left paddle: 2 units from left edge
+                x: 0.0,  // Left paddle: at left edge of field
                 y: sim_state.game_state.paddle1_pos as f64 - PADDLE_HEIGHT as f64 / 2.0,
-                width: 4.0,
+                width: 2.0,
                 height: PADDLE_HEIGHT as f64,
                 color: Color::White,
             });
             ctx.draw(&Rectangle {
-                x: game_width - 6.0,  // Right paddle: 2 units from right edge (so it's 6 units from right to account for 4.0 width)
+                x: game_width - 2.0,  // Right paddle: at right edge of field
                 y: sim_state.game_state.paddle2_pos as f64 - PADDLE_HEIGHT as f64 / 2.0,
-                width: 4.0,
+                width: 2.0,
                 height: PADDLE_HEIGHT as f64,
                 color: Color::White,
             });
@@ -192,4 +197,99 @@ fn create_info_text(config: &Config) -> Text {
         ]),
     ]);
     text
+}
+
+fn draw_genome_panels(f: &mut Frame, sim_state: &SimulationState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    draw_genome_visualization(f, &sim_state.left_player.weights, "Left Player Genome", chunks[0]);
+    draw_genome_visualization(f, &sim_state.right_player.weights, "Right Player Genome", chunks[1]);
+}
+
+fn draw_genome_visualization(f: &mut Frame, genome: &[f32], title: &str, area: Rect) {
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    if genome.is_empty() {
+        let placeholder = Paragraph::new("No genome data")
+            .style(Style::default().fg(Color::Gray))
+            .alignment(Alignment::Center);
+        f.render_widget(placeholder, inner_area);
+        return;
+    }
+
+    // Calculate grid dimensions to fit all weights
+    let available_cells = (inner_area.width as usize) * (inner_area.height as usize);
+    let weights_to_show = genome.len().min(available_cells);
+    
+    if weights_to_show == 0 {
+        return;
+    }
+
+    // Create text representation using block characters
+    let mut lines = Vec::new();
+    let cols = inner_area.width as usize;
+    
+    // Normalize the genome weights to a 0-1 range for color mapping.
+    let min_val = genome.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+    let max_val = genome.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    let range = if max_val > min_val {
+        max_val - min_val
+    } else {
+        1.0
+    };
+
+    for row_start in (0..weights_to_show).step_by(cols) {
+        let mut spans = Vec::new();
+        
+        for col in 0..cols {
+            let idx = row_start + col;
+            if idx >= weights_to_show {
+                // Fill remaining columns with spaces
+                spans.push(Span::raw(" "));
+                continue;
+            }
+            
+            let weight = genome[idx];
+            let normalized = (weight - min_val) / range;
+
+            // Create a color gradient: blue -> cyan -> green -> yellow -> red
+            let color = if normalized < 0.25 {
+                // Blue to Cyan
+                let t = normalized * 4.0;
+                Color::Rgb(0, (t * 255.0) as u8, 255)
+            } else if normalized < 0.5 {
+                // Cyan to Green  
+                let t = (normalized - 0.25) * 4.0;
+                Color::Rgb(0, 255, ((1.0 - t) * 255.0) as u8)
+            } else if normalized < 0.75 {
+                // Green to Yellow
+                let t = (normalized - 0.5) * 4.0;
+                Color::Rgb((t * 255.0) as u8, 255, 0)
+            } else {
+                // Yellow to Red
+                let t = (normalized - 0.75) * 4.0;
+                Color::Rgb(255, ((1.0 - t) * 255.0) as u8, 0)
+            };
+
+            spans.push(Span::styled("█", Style::default().fg(color)));
+        }
+        
+        lines.push(Line::from(spans));
+        
+        // Stop if we've filled the available height
+        if lines.len() >= inner_area.height as usize {
+            break;
+        }
+    }
+
+    let genome_paragraph = Paragraph::new(lines);
+    f.render_widget(genome_paragraph, inner_area);
 }

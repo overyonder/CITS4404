@@ -58,6 +58,6 @@ impl SimulationState {
         self.game_state.paddle2_vel = -p2_outputs[0] * PADDLE_MAX_VEL;
 
         // Advance the game state by one frame.
-        self.game_state.advance_frame();
+        self.game_state.advance_frame(config);
     }
 }

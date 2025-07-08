@@ -16,16 +16,20 @@ use std::{sync::mpsc, thread};
 
 /// Creates a vector of configuration items for display.
 fn get_config_items(config: &Config) -> Vec<(&'static str, String)> {
-    vec![
+    let mut items = vec![
         ("Engine", config.engine.to_string()),
         ("Generations", config.generations.to_string()),
         ("Population Size", config.population_size.to_string()),
         ("Elite Count", config.elite_count.to_string()),
-        ("Mutation Rate", format!("{:.2}", config.mutation_rate)),
-        (
-            "Mutation Strength",
-            format!("{:.2}", config.mutation_strength),
-        ),
+    ];
+
+    // Only show mutation parameters when using Modern mutation strategy
+    if matches!(config.mutation_strategy, MutationStrategy::Modern) {
+        items.push(("Mutation Rate", format!("{:.2}", config.mutation_rate)));
+        items.push(("Mutation Strength", format!("{:.2}", config.mutation_strength)));
+    }
+
+    items.extend([
         ("Activation", config.activation.to_string()),
         (
             "Reproduction",
@@ -33,8 +37,11 @@ fn get_config_items(config: &Config) -> Vec<(&'static str, String)> {
         ),
         ("Mutation", config.mutation_strategy.to_string()),
         ("Fitness", config.fitness_func.to_string()),
+        ("Random Ball Dir", config.random_ball_direction.to_string()),
         ("Concurrent", config.concurrent.to_string()),
-    ]
+    ]);
+
+    items
 }
 
 /// Draws the UI for configuring a new training session.
@@ -145,97 +152,98 @@ pub fn handle_config_input(app: &mut App, key_code: KeyCode) {
 /// Helper function to modify a configuration value based on the selected index.
 fn change_config_value(app: &mut App, increase: bool) {
     let config = &mut app.config;
-    match app.config_editor.state.selected().unwrap_or(0) {
-        0 => {
-            // Engine
-            config.engine = match config.engine {
-                Engine::Stack => if increase { Engine::Heap } else { Engine::Gpu },
-                Engine::Heap => if increase { Engine::Simd } else { Engine::Stack },
-                Engine::Simd => if increase { Engine::Gpu } else { Engine::Heap },
-                Engine::Gpu => if increase { Engine::Stack } else { Engine::Simd },
-            };
+    let items = get_config_items(config);
+    
+    if let Some(selected) = app.config_editor.state.selected() {
+        if selected >= items.len() {
+            return;
         }
-        1 => {
-            // Generations
-            let step = 50;
-            if increase {
-                config.generations += step;
-            } else {
-                config.generations = config.generations.saturating_sub(step).max(10);
+        
+        let item_name = items[selected].0;
+        match item_name {
+            "Engine" => {
+                config.engine = match config.engine {
+                    Engine::Stack => if increase { Engine::Heap } else { Engine::Gpu },
+                    Engine::Heap => if increase { Engine::Simd } else { Engine::Stack },
+                    Engine::Simd => if increase { Engine::Gpu } else { Engine::Heap },
+                    Engine::Gpu => if increase { Engine::Stack } else { Engine::Simd },
+                };
             }
-        }
-        2 => {
-            // Population Size
-            let step = 10;
-            if increase {
-                config.population_size += step;
-            } else {
-                config.population_size = config.population_size.saturating_sub(step).max(10);
+            "Generations" => {
+                let step = 50;
+                if increase {
+                    config.generations += step;
+                } else {
+                    config.generations = config.generations.saturating_sub(step).max(10);
+                }
             }
-        }
-        3 => {
-            // Elite Count
-            if increase {
-                config.elite_count += 1;
-            } else {
-                config.elite_count = config.elite_count.saturating_sub(1).max(1);
+            "Population Size" => {
+                let step = 10;
+                if increase {
+                    config.population_size += step;
+                } else {
+                    config.population_size = config.population_size.saturating_sub(step).max(10);
+                }
             }
-        }
-        4 => {
-            // Mutation Rate
-            let step = 0.01;
-            if increase {
-                config.mutation_rate = (config.mutation_rate + step).min(1.0);
-            } else {
-                config.mutation_rate = (config.mutation_rate - step).max(0.0);
+            "Elite Count" => {
+                if increase {
+                    config.elite_count += 1;
+                } else {
+                    config.elite_count = config.elite_count.saturating_sub(1).max(1);
+                }
             }
-        }
-        5 => {
-            // Mutation Strength
-            let step = 0.05;
-            if increase {
-                config.mutation_strength = (config.mutation_strength + step).min(2.0);
-            } else {
-                config.mutation_strength = (config.mutation_strength - step).max(0.0);
+            "Mutation Rate" => {
+                let step = 0.01;
+                if increase {
+                    config.mutation_rate = (config.mutation_rate + step).min(1.0);
+                } else {
+                    config.mutation_rate = (config.mutation_rate - step).max(0.0);
+                }
             }
-        }
-        6 => {
-            // Activation
-            config.activation = match config.activation {
-                Activation::ClampedLinear => if increase { Activation::Tanh } else { Activation::Linear },
-                Activation::Tanh => if increase { Activation::Relu } else { Activation::ClampedLinear },
-                Activation::Relu => if increase { Activation::Atan } else { Activation::Tanh },
-                Activation::Atan => if increase { Activation::Sigmoid } else { Activation::Relu },
-                Activation::Sigmoid => if increase { Activation::Linear } else { Activation::Atan },
-                Activation::Linear => if increase { Activation::ClampedLinear } else { Activation::Sigmoid },
-            };
-        }
-        7 => {
-            // Reproduction Strategy
-            config.reproduction_strategy = match config.reproduction_strategy {
-                ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
-                ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
+            "Mutation Strength" => {
+                let step = 0.05;
+                if increase {
+                    config.mutation_strength = (config.mutation_strength + step).min(2.0);
+                } else {
+                    config.mutation_strength = (config.mutation_strength - step).max(0.0);
+                }
             }
-        }
-        8 => {
-            // Mutation Strategy
-            config.mutation_strategy = match config.mutation_strategy {
-                MutationStrategy::CppEquivalent => MutationStrategy::Modern,
-                MutationStrategy::Modern => MutationStrategy::CppEquivalent,
+            "Activation" => {
+                config.activation = match config.activation {
+                    Activation::ClampedLinear => if increase { Activation::Tanh } else { Activation::Linear },
+                    Activation::Tanh => if increase { Activation::Relu } else { Activation::ClampedLinear },
+                    Activation::Relu => if increase { Activation::Atan } else { Activation::Tanh },
+                    Activation::Atan => if increase { Activation::Sigmoid } else { Activation::Relu },
+                    Activation::Sigmoid => if increase { Activation::Linear } else { Activation::Atan },
+                    Activation::Linear => if increase { Activation::ClampedLinear } else { Activation::Sigmoid },
+                };
             }
-        }
-        9 => {
-            // Fitness Function
-            config.fitness_func = match config.fitness_func {
-                FitnessFunc::CppEquivalent => if increase { FitnessFunc::Balanced } else { FitnessFunc::Performance },
-                FitnessFunc::Balanced => if increase { FitnessFunc::Performance } else { FitnessFunc::CppEquivalent },
-                FitnessFunc::Performance => if increase { FitnessFunc::CppEquivalent } else { FitnessFunc::Balanced },
+            "Reproduction" => {
+                config.reproduction_strategy = match config.reproduction_strategy {
+                    ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
+                    ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
+                }
             }
+            "Mutation" => {
+                config.mutation_strategy = match config.mutation_strategy {
+                    MutationStrategy::CppEquivalent => MutationStrategy::Modern,
+                    MutationStrategy::Modern => MutationStrategy::CppEquivalent,
+                }
+            }
+            "Fitness" => {
+                config.fitness_func = match config.fitness_func {
+                    FitnessFunc::CppEquivalent => if increase { FitnessFunc::Balanced } else { FitnessFunc::Performance },
+                    FitnessFunc::Balanced => if increase { FitnessFunc::Performance } else { FitnessFunc::CppEquivalent },
+                    FitnessFunc::Performance => if increase { FitnessFunc::CppEquivalent } else { FitnessFunc::Balanced },
+                }
+            }
+            "Random Ball Dir" => {
+                config.random_ball_direction = !config.random_ball_direction;
+            }
+            "Concurrent" => {
+                config.concurrent = !config.concurrent;
+            }
+            _ => {}
         }
-        10 => {
-            // Concurrent
-            config.concurrent = !config.concurrent;
-        }
-        _ => {}
     }
 }

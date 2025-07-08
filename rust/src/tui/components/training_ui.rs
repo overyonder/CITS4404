@@ -1,17 +1,17 @@
 //! The training screen component.
 
 use crate::tui::{
-    app::{App, AppState, Tab},
-    training::{GenerationState, MatchupState, TrainingState},
+    app::{App, AppState},
+    training::{TrainingState},
 };
 use crossterm::event::KeyCode;
-use ratatui::widgets::canvas::{Canvas, Rectangle};
+
 
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Gauge, Paragraph, Sparkline, Tabs},
+    widgets::{Block, BorderType, Borders, Gauge, Paragraph, Sparkline},
     Frame,
 };
 
@@ -23,9 +23,6 @@ pub fn handle_training_input(app: &mut App, key_code: KeyCode) {
             app.training = None; // Clean up training state
             app.tx = None;
             app.rx = None;
-        }
-        KeyCode::Tab => {
-            app.next_tab();
         }
         KeyCode::Enter => {
             if let Some(ts) = &app.training {
@@ -60,41 +57,20 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
         let main_area = chunks[0];
         let sidebar_area = chunks[1];
 
-        // Main area layout: tabs, content, and fitness history at bottom
+        // Main area layout: progress overview and fitness history at bottom
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(&[
-                Constraint::Length(3),     // Tabs
-                Constraint::Min(10),       // Content area
+                Constraint::Min(10),       // Progress overview area
                 Constraint::Length(8),     // Fitness history
             ])
             .split(main_area);
 
-        let titles: Vec<Line<'_>> = ["Generations", "Matchups"]
-            .iter()
-            .map(|t| Line::from(Span::styled(*t, Style::default())))
-            .collect();
-
-        let tabs = Tabs::new(titles)
-            .block(
-                Block::default()
-                    .title("View")
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded),
-            )
-            .select(app.active_tab as usize)
-            .style(Style::default().fg(Color::Cyan))
-            .highlight_style(Style::default().add_modifier(Modifier::BOLD));
-
-        f.render_widget(tabs, main_chunks[0]);
-
-        match app.active_tab {
-            Tab::Generations => draw_generations_view(f, training_state, main_chunks[1]),
-            Tab::Matchups => draw_matchups_view(f, training_state, main_chunks[1]),
-        }
+        // Draw progress overview
+        draw_progress_overview(f, training_state, main_chunks[0]);
 
         // Fitness History at bottom of main panel
-        draw_fitness_history(f, training_state, main_chunks[2]);
+        draw_fitness_history(f, training_state, main_chunks[1]);
 
         // Sidebar layout: Progress, Champion Genome, Info
         let sidebar_chunks = Layout::default()
@@ -102,7 +78,7 @@ pub fn draw_training_ui(f: &mut Frame, app: &mut App, area: Rect) {
             .constraints([
                 Constraint::Length(6),  // Progress 
                 Constraint::Min(8),     // Champion Genome (larger)
-                Constraint::Length(12), // Info (larger to prevent clipping)
+                Constraint::Length(16), // Info (taller to prevent clipping)
             ])
             .split(sidebar_area);
 
@@ -156,113 +132,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-/// Draws the content for the "Generations" tab.
-fn draw_generations_view(f: &mut Frame, training_state: &TrainingState, area: Rect) {
-    let block = Block::default()
-        .title("Generations Progress")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner_area = block.inner(area);
-    f.render_widget(block, area);
 
-    if training_state.generations.is_empty() || inner_area.area() == 0 {
-        return;
-    }
-
-    let num_generations = training_state.generations.len();
-    let (cols, rows) = calculate_grid_size(num_generations, inner_area.width as usize);
-
-    if cols == 0 || rows == 0 {
-        return;
-    }
-
-    // Use a slightly larger cell size for visibility
-    let cell_width = 2.0;
-    let cell_height = 1.0;
-
-    let canvas = Canvas::default()
-        .block(Block::default()) // No inner block
-        .x_bounds([0.0, cols as f64 * cell_width])
-        .y_bounds([0.0, rows as f64 * cell_height])
-        .paint(move |ctx| {
-            for (i, state) in training_state.generations.iter().enumerate() {
-                let col = i % cols;
-                let row = i / cols;
-
-                let color = match state {
-                    GenerationState::Pending => Color::DarkGray,
-                    GenerationState::InProgress => Color::Yellow,
-                    GenerationState::Completed => Color::Green,
-                };
-
-                ctx.draw(&Rectangle {
-                    x: col as f64 * cell_width,
-                    y: (rows - 1 - row) as f64 * cell_height, // Invert Y-axis
-                    width: cell_width - 0.5,                  // Add some spacing
-                    height: cell_height,
-                    color,
-                });
-            }
-        });
-
-    f.render_widget(canvas, inner_area);
-}
-
-/// Draws the content for the "Matchups" tab, showing a grid of game states.
-fn draw_matchups_view(f: &mut Frame, training_state: &TrainingState, area: Rect) {
-    let block = Block::default()
-        .title("Matchups Grid")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded);
-    let inner_area = block.inner(area);
-    f.render_widget(block, area);
-
-    if training_state.matchups.is_empty() || inner_area.area() == 0 {
-        return;
-    }
-
-    let num_matchups = training_state.matchups.len();
-    let (cols, rows) = calculate_grid_size(num_matchups, inner_area.width as usize);
-
-    if cols == 0 || rows == 0 {
-        return;
-    }
-
-    // Ensure the grid fits within the available area
-    let cell_size = ((inner_area.width as f64) / cols as f64).min(
-        (inner_area.height as f64) / rows as f64
-    ).max(1.0);
-    
-    let canvas = Canvas::default()
-        .x_bounds([0.0, cols as f64 * cell_size])
-        .y_bounds([0.0, rows as f64 * cell_size])
-        .paint(move |ctx| {
-            for (i, state) in training_state.matchups.iter().enumerate() {
-                if i >= cols * rows {
-                    break; // Don't draw more items than fit in the grid
-                }
-                
-                let col = i % cols;
-                let row = i / cols;
-
-                let color = match state {
-                    MatchupState::Pending => Color::DarkGray,
-                    MatchupState::InProgress => Color::Yellow,
-                    MatchupState::Completed => Color::Green,
-                };
-
-                ctx.draw(&Rectangle {
-                    x: col as f64 * cell_size,
-                    y: (rows - 1 - row) as f64 * cell_size,
-                    width: cell_size * 0.8, // Add some spacing between cells
-                    height: cell_size * 0.8,
-                    color,
-                });
-            }
-        });
-
-    f.render_widget(canvas, inner_area);
-}
 
 /// Draws the info panel with colorful badges for configuration parameters.
 fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
@@ -317,12 +187,17 @@ fn draw_info_panel(f: &mut Frame, app: &App, area: Rect) {
         Line::from(format!("Fitness: {}", app.config.fitness_func)),
         Line::from(format!("Population: {}", app.config.population_size)),
         Line::from(format!("Generations: {}", app.config.generations)),
-        Line::from(format!("Mutation Rate: {:.3}", app.config.mutation_rate)),
-        Line::from(format!("Mutation Str: {:.3}", app.config.mutation_strength)),
         Line::from(format!("Concurrent: {}", app.config.concurrent)),
         Line::from(format!("Elite Count: {}", app.config.elite_count)),
         Line::from(format!("Reproduction: {}", app.config.reproduction_strategy)),
+        Line::from(format!("Mutation: {}", app.config.mutation_strategy)),
     ];
+
+    // Only show mutation parameters when using Modern mutation strategy
+    if matches!(app.config.mutation_strategy, crate::config::MutationStrategy::Modern) {
+        lines.insert(lines.len() - 1, Line::from(format!("Mutation Rate: {:.3}", app.config.mutation_rate)));
+        lines.insert(lines.len() - 1, Line::from(format!("Mutation Str: {:.3}", app.config.mutation_strength)));
+    }
 
     if is_concurrent {
         lines.insert(
@@ -432,16 +307,16 @@ fn draw_fitness_history(f: &mut Frame, training_state: &TrainingState, area: Rec
             .collect()
     };
 
-    let sparkline = Sparkline::default()
-        .data(&fitness_data)
-        .style(Style::default().fg(Color::Yellow));
-    f.render_widget(sparkline, inner_area);
-
     // Draw fitness scale on the right side
     let scale_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(8)])
+        .constraints([Constraint::Min(0), Constraint::Length(6)])
         .split(inner_area);
+
+    let sparkline = Sparkline::default()
+        .data(&fitness_data)
+        .style(Style::default().fg(Color::Yellow));
+    f.render_widget(sparkline, scale_chunks[0]);
 
     if scale_chunks[1].height >= 4 {
         let scale_text = format!("Max\n{:.3}\n\nMin\n{:.3}", max_fitness, min_fitness);
@@ -482,64 +357,105 @@ fn draw_champion_genome(f: &mut Frame, training_state: &TrainingState, area: Rec
         return;
     }
 
-    let champion_canvas = Canvas::default()
-        .x_bounds([0.0, 31.0])
-        .y_bounds([0.0, 7.0])
-        .paint(|ctx| {
-            // Normalize the genome weights to a 0-1 range for color mapping.
-            let min_val = genome.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-            let max_val = genome.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-            let range = if max_val > min_val {
-                max_val - min_val
+    // Calculate grid dimensions to fit all weights
+    let available_cells = (inner_area.width as usize) * (inner_area.height as usize);
+    let weights_to_show = genome.len().min(available_cells);
+    
+    if weights_to_show == 0 {
+        return;
+    }
+
+    // Create text representation using block characters
+    let mut lines = Vec::new();
+    let cols = inner_area.width as usize;
+    
+    // Normalize the genome weights to a 0-1 range for color mapping.
+    let min_val = genome.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+    let max_val = genome.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    let range = if max_val > min_val {
+        max_val - min_val
+    } else {
+        1.0
+    };
+
+    for row_start in (0..weights_to_show).step_by(cols) {
+        let mut spans = Vec::new();
+        
+        for col in 0..cols {
+            let idx = row_start + col;
+            if idx >= weights_to_show {
+                // Fill remaining columns with spaces
+                spans.push(Span::raw(" "));
+                continue;
+            }
+            
+            let weight = genome[idx];
+            let normalized = (weight - min_val) / range;
+
+            // Create a more visible color gradient: blue -> cyan -> green -> yellow -> red
+            let color = if normalized < 0.25 {
+                // Blue to Cyan
+                let t = normalized * 4.0;
+                Color::Rgb(0, (t * 255.0) as u8, 255)
+            } else if normalized < 0.5 {
+                // Cyan to Green  
+                let t = (normalized - 0.25) * 4.0;
+                Color::Rgb(0, 255, ((1.0 - t) * 255.0) as u8)
+            } else if normalized < 0.75 {
+                // Green to Yellow
+                let t = (normalized - 0.5) * 4.0;
+                Color::Rgb((t * 255.0) as u8, 255, 0)
             } else {
-                1.0
+                // Yellow to Red
+                let t = (normalized - 0.75) * 4.0;
+                Color::Rgb(255, ((1.0 - t) * 255.0) as u8, 0)
             };
 
-            for (i, &weight) in genome.iter().take(217).enumerate() {
-                let normalized = (weight - min_val) / range;
-
-                // Create a more visible color gradient: blue -> cyan -> green -> yellow -> red
-                let color = if normalized < 0.25 {
-                    // Blue to Cyan
-                    let t = normalized * 4.0;
-                    Color::Rgb(0, (t * 255.0) as u8, 255)
-                } else if normalized < 0.5 {
-                    // Cyan to Green  
-                    let t = (normalized - 0.25) * 4.0;
-                    Color::Rgb(0, 255, ((1.0 - t) * 255.0) as u8)
-                } else if normalized < 0.75 {
-                    // Green to Yellow
-                    let t = (normalized - 0.5) * 4.0;
-                    Color::Rgb((t * 255.0) as u8, 255, 0)
-                } else {
-                    // Yellow to Red
-                    let t = (normalized - 0.75) * 4.0;
-                    Color::Rgb(255, ((1.0 - t) * 255.0) as u8, 0)
-                };
-
-                let col = i % 31;
-                let row = i / 31;
-
-                ctx.draw(&Rectangle {
-                    x: col as f64,
-                    y: (6 - row) as f64, // Invert Y-axis
-                    width: 1.0,
-                    height: 1.0,
-                    color,
-                });
-            }
-        });
-    f.render_widget(champion_canvas, inner_area);
-}
-
-fn calculate_grid_size(num_items: usize, area_width: usize) -> (usize, usize) {
-    if num_items == 0 {
-        return (0, 0);
+            spans.push(Span::styled("█", Style::default().fg(color)));
+        }
+        
+        lines.push(Line::from(spans));
+        
+        // Stop if we've filled the available height
+        if lines.len() >= inner_area.height as usize {
+            break;
+        }
     }
-    const CELL_WIDTH: usize = 2; // Each block is at least 2 chars wide
-    let max_cols = (area_width / CELL_WIDTH).max(1);
-    let cols = (num_items as f64).sqrt().ceil() as usize;
-    let cols = cols.min(max_cols);
-    let rows = (num_items + cols - 1) / cols;
-    (cols, rows)
+
+    let genome_paragraph = Paragraph::new(lines);
+    f.render_widget(genome_paragraph, inner_area);
 }
+
+fn draw_progress_overview(f: &mut Frame, training_state: &TrainingState, area: Rect) {
+    let block = Block::default()
+        .title("Training Progress")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded);
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner_area.area() == 0 {
+        return;
+    }
+
+    // Show simple training status text
+    let status_text = if training_state.running {
+        format!(
+            "Training in progress...\n\nGeneration: {} / {}\nBest Fitness: {:.3}\nElapsed: {:02}:{:02}",
+            training_state.current_generation,
+            training_state.total_generations,
+            training_state.fitness_history.last().unwrap_or(&0.0),
+            training_state.start_time.elapsed().as_secs() / 60,
+            training_state.start_time.elapsed().as_secs() % 60
+        )
+    } else {
+        "Training completed!".to_string()
+    };
+
+    let paragraph = Paragraph::new(status_text)
+        .style(Style::default().fg(Color::Cyan))
+        .alignment(Alignment::Center);
+    f.render_widget(paragraph, inner_area);
+}
+
+

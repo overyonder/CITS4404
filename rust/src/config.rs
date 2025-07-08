@@ -129,6 +129,9 @@ pub struct Config {
     pub reproduction_strategy: ReproductionStrategy,
     /// The strategy for mutating individuals during evolution.
     pub mutation_strategy: MutationStrategy,
+    /// If `true`, the ball starting velocity is randomized in a cone towards the receiving player
+    /// rather than always having the same angle. This adds variability to training scenarios.
+    pub random_ball_direction: bool,
 }
 
 /// Provides a default, sensible configuration for the evolutionary algorithm.
@@ -153,6 +156,7 @@ impl Default for Config {
             date_trained: None,
             reproduction_strategy: ReproductionStrategy::default(), // C++ default
             mutation_strategy: MutationStrategy::default(), // C++ default
+            random_ball_direction: false, // C++ default: fixed direction
         }
     }
 }

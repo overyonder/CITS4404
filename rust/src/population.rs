@@ -2,7 +2,7 @@ use crate::{
     config::Config,
     gamestate::GameState,
     traits::Individual,
-    tui::training::{MatchupState, TrainingMessage},
+    tui::training::TrainingMessage,
 };
 use rand::{prelude::*, rng};
 use rayon::prelude::*;
@@ -65,33 +65,19 @@ impl<I: Individual> Population<I> {
 
     /// Evaluates the fitness of all individuals by pitting them against each other
     /// in a round-robin tournament, sending real-time progress updates.
-    pub fn evaluate_fitness(&mut self, tx: &Option<mpsc::Sender<TrainingMessage>>) {
+    pub fn evaluate_fitness(&mut self, _tx: &Option<mpsc::Sender<TrainingMessage>>) {
         trace!("Resetting fitness scores.");
         for fitness in self.fitness.iter() {
             fitness.store(0, Ordering::Relaxed);
         }
 
         let pop_size = self.config.population_size;
-        trace!("Starting sequential round-robin tournament.");
+        trace!("Starting sequential full tournament (C++ equivalent).");
 
-        let mut matchup_counter = 0;
         for i in 0..pop_size {
-            for j in (i + 1)..pop_size {
-                let matchup_index = matchup_counter;
-
-                // Send InProgress message
-                if let Some(tx) = tx {
-                    if tx
-                        .send(TrainingMessage::MatchupUpdate {
-                            matchup_index,
-                            state: MatchupState::InProgress,
-                        })
-                        .is_err()
-                    {
-                        return; // Exit if UI closed
-                    }
-                }
-
+            for j in 0..pop_size {
+                if i == j { continue; } // Don't play against yourself
+                
                 // Run simulation
                 let mut game_state = GameState::new();
                 let ((left_primary, left_secondary), (right_primary, right_secondary)) =
@@ -102,24 +88,9 @@ impl<I: Individual> Population<I> {
                 let right_packed_score = ((right_primary as u64) << 32) | (right_secondary as u64);
                 self.fitness[i].fetch_add(left_packed_score, Ordering::Relaxed);
                 self.fitness[j].fetch_add(right_packed_score, Ordering::Relaxed);
-
-                // Send Completed message
-                if let Some(tx) = tx {
-                    if tx
-                        .send(TrainingMessage::MatchupUpdate {
-                            matchup_index,
-                            state: MatchupState::Completed,
-                        })
-                        .is_err()
-                    {
-                        return; // Exit if UI closed
-                    }
-                }
-
-                matchup_counter += 1;
             }
         }
-        trace!("Sequential tournament finished.");
+        trace!("Sequential full tournament finished.");
     }
 
     /// A parallel version of `evaluate_fitness` using Rayon, sending real-time progress.
@@ -131,24 +102,19 @@ impl<I: Individual> Population<I> {
 
         let pop_size = self.config.population_size;
         let pairs: Vec<(usize, usize)> = (0..pop_size)
-            .flat_map(|i| ((i + 1)..pop_size).map(move |j| (i, j)))
+            .flat_map(|i| (0..pop_size).filter(move |&j| i != j).map(move |j| (i, j)))
             .collect();
 
         trace!(
             total_games = pairs.len(),
-            "Starting concurrent round-robin tournament."
+            "Starting concurrent full tournament (C++ equivalent)."
         );
 
         if let Some(tx) = tx {
             // We have a sender, use for_each_with to clone it for each thread.
-            pairs.par_iter().enumerate().for_each_with(
+            pairs.par_iter().for_each_with(
                 tx.clone(),
-                |thread_tx, (matchup_index, &(i, j))| {
-                    let _ = thread_tx.send(TrainingMessage::MatchupUpdate {
-                        matchup_index,
-                        state: MatchupState::InProgress,
-                    });
-
+                |_thread_tx, &(i, j)| {
                     let mut game_state = GameState::new();
                     let ((left_primary, left_secondary), (right_primary, right_secondary)) =
                         game_state.simulate(
@@ -164,11 +130,6 @@ impl<I: Individual> Population<I> {
 
                     self.fitness[i].fetch_add(left_packed_score, Ordering::Relaxed);
                     self.fitness[j].fetch_add(right_packed_score, Ordering::Relaxed);
-
-                    let _ = thread_tx.send(TrainingMessage::MatchupUpdate {
-                        matchup_index,
-                        state: MatchupState::Completed,
-                    });
                 },
             );
         } else {
@@ -186,7 +147,7 @@ impl<I: Individual> Population<I> {
                 self.fitness[j].fetch_add(right_packed_score, Ordering::Relaxed);
             });
         }
-        trace!("Concurrent round-robin tournament finished.");
+        trace!("Concurrent full tournament finished.");
     }
 
     /// Selects the fittest individuals and returns their indices, sorted by fitness.
@@ -300,24 +261,7 @@ impl<I: Individual> Population<I> {
         for gen in 0..self.config.generations {
             debug!(generation = gen + 1, "Starting generation.");
 
-            let pop_size = self.config.population_size;
-            let total_matchups = if pop_size > 1 {
-                pop_size * (pop_size - 1) / 2
-            } else {
-                0
-            };
 
-            // Signal the start of a new generation.
-            if let Some(tx) = &tx {
-                if tx
-                    .send(TrainingMessage::GenerationStart { total_matchups })
-                    .is_err()
-                {
-                    debug!("Evolution stopped early: UI channel closed.");
-                    let sorted_indices = self.select_elites();
-                    return self.individuals[sorted_indices[0]].clone();
-                }
-            }
 
             trace!("Evaluating fitness...");
             if self.config.concurrent {

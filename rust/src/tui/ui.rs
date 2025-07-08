@@ -4,7 +4,7 @@ use crate::{
     tui::{
         app::{App, AppState},
         components,
-        training::{MatchupState, TrainingMessage},
+        training::TrainingMessage,
     },
     Individual,
 };
@@ -41,17 +41,6 @@ fn handle_events(app: &mut App) -> Result<()> {
             while let Ok(msg) = app.rx.as_ref().unwrap().try_recv() {
                 if let Some(ts) = app.training.as_mut() {
                     match msg {
-                        TrainingMessage::GenerationStart { total_matchups } => {
-                            ts.matchups = vec![MatchupState::Pending; total_matchups];
-                        }
-                        TrainingMessage::MatchupUpdate {
-                            matchup_index,
-                            state,
-                        } => {
-                            if let Some(matchup) = ts.matchups.get_mut(matchup_index) {
-                                *matchup = state;
-                            }
-                        }
                         TrainingMessage::Progress {
                             generation,
                             best_fitness,
@@ -59,9 +48,14 @@ fn handle_events(app: &mut App) -> Result<()> {
                             ..
                         } => {
                             ts.current_generation = generation;
-                            ts.best_fitness = best_fitness;
                             ts.fitness_history.push(best_fitness);
-                            app.best_genome = Some(genome_weights);
+                            
+                            // Only update champion genome if this is a new all-time best
+                            if best_fitness > ts.best_fitness {
+                                ts.best_fitness = best_fitness;
+                                ts.genome_weights = genome_weights.clone();
+                                app.best_genome = Some(genome_weights);
+                            }
                         }
                         TrainingMessage::Finished => {
                             ts.running = false;

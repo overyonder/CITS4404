@@ -112,7 +112,7 @@ impl GameState {
         ]
     }
 
-    /// Resets the ball to the center with a fixed velocity, mimicking the C++ version.
+    /// Resets the ball to the center with velocity, optionally randomized.
     pub fn reset_ball(&mut self, serve_to_left_player: bool) {
         self.ball_pos = ((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
 
@@ -123,6 +123,29 @@ impl GameState {
         }
     }
 
+    /// Resets the ball with optional randomization based on config.
+    pub fn reset_ball_with_config(&mut self, serve_to_left_player: bool, config: &Config) {
+        self.ball_pos = ((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
+
+        let base_vel_x = if serve_to_left_player { BALL_INITIAL_VEL_X } else { -BALL_INITIAL_VEL_X };
+        let base_vel_y = if serve_to_left_player { BALL_INITIAL_VEL_Y } else { -BALL_INITIAL_VEL_Y };
+
+        if config.random_ball_direction {
+            // Randomize the angle within a cone (±30 degrees from straight)
+            use rand::Rng;
+            let mut rng = rand::rng();
+            let angle_variation = rng.random_range(-std::f32::consts::PI/6.0..std::f32::consts::PI/6.0); // ±30 degrees
+            
+            let speed = (base_vel_x * base_vel_x + base_vel_y * base_vel_y).sqrt();
+            let base_angle = base_vel_y.atan2(base_vel_x);
+            let new_angle = base_angle + angle_variation;
+            
+            self.ball_vel = (speed * new_angle.cos(), speed * new_angle.sin());
+        } else {
+            self.ball_vel = (base_vel_x, base_vel_y);
+        }
+    }
+
     /// Advances the game by one full tick during a training simulation.
     ///
     /// # Algorithm
@@ -130,7 +153,7 @@ impl GameState {
     /// 2.  `advance_frame`: Update all positions and handle physics/collisions for the tick.
     pub fn tick<I: Individual>(&mut self, left: &I, right: &I, config: &Config) {
         self.update_paddles(left, right, config);
-        self.advance_frame();
+        self.advance_frame(config);
     }
 
     /// Sets paddle velocities based on neural network outputs.
@@ -162,7 +185,7 @@ impl GameState {
     /// # Algorithm
     /// 1.  Update paddle positions based on their current velocities, clamping to screen bounds.
     /// 2.  Call `update_ball` to handle all ball-related physics for the frame.
-    pub fn advance_frame(&mut self) {
+    pub fn advance_frame(&mut self, config: &Config) {
         // Update paddle positions and clamp them to the screen boundaries.
         self.paddle1_pos += self.paddle1_vel;
         if self.paddle1_pos < PADDLE_HEIGHT / 2.0 {
@@ -184,7 +207,7 @@ impl GameState {
             self.paddle2_vel = 0.0;
         }
 
-        self.update_ball();
+        self.update_ball(config);
     }
 
     /// Updates the ball's position and handles all collisions.
@@ -194,7 +217,7 @@ impl GameState {
     /// move, then check for collisions. Collision checks use the ball's center position for accuracy.
     /// The paddle collision logic includes imparting some of the paddle's velocity to the ball,
     /// creating more dynamic and interesting rallies.
-    pub fn update_ball(&mut self) {
+    pub fn update_ball(&mut self, config: &Config) {
         self.ball_pos.0 += self.ball_vel.0;
         self.ball_pos.1 += self.ball_vel.1;
 
@@ -295,12 +318,12 @@ impl GameState {
                 self.scores.1 += 1; // Player 2 (right) scores
                 self.paddle1_pos = (HEIGHT / 2) as f32;
                 self.paddle2_pos = (HEIGHT / 2) as f32;
-                self.reset_ball(true); // Serve to player 2 (right)
+                self.reset_ball_with_config(true, config); // Serve to player 2 (right)
             } else if self.ball_pos.0 > WIDTH as f32 {
                 self.scores.0 += 1; // Player 1 (left) scores
                 self.paddle1_pos = (HEIGHT / 2) as f32;
                 self.paddle2_pos = (HEIGHT / 2) as f32;
-                self.reset_ball(false); // Serve to player 1 (left)
+                self.reset_ball_with_config(false, config); // Serve to player 1 (left)
             }
         }
     }
