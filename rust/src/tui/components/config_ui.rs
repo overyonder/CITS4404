@@ -21,25 +21,30 @@ use std::{sync::mpsc, thread};
 
 /// Creates a vector of configuration items for display.
 fn get_config_items(config: &Config) -> Vec<(&'static str, String)> {
-    vec![
+    let mut items = vec![
         ("Engine", config.engine.to_string()),
         ("Generations", config.generations.to_string()),
         ("Population Size", config.population_size.to_string()),
         ("Elite Count", config.elite_count.to_string()),
-        ("Mutation Rate", format!("{:.2}", config.mutation_rate)),
-        (
-            "Mutation Strength",
-            format!("{:.2}", config.mutation_strength),
-        ),
         ("Activation", config.activation.to_string()),
         ("Mutation Strategy", config.mutation_strategy.to_string()),
-        ("Concurrent", config.concurrent.to_string()),
         ("Fitness Func", config.fitness_func.to_string()),
         (
             "Reproduction",
             config.reproduction_strategy.to_string(),
         ),
-    ]
+    ];
+    
+    // Only show mutation parameters if using Modern strategy
+    if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+        items.insert(5, ("Mutation Rate", format!("{:.2}", config.mutation_rate)));
+        items.insert(6, ("Mutation Strength", format!("{:.2}", config.mutation_strength)));
+    }
+    
+    // Add concurrent setting at the bottom
+    items.push(("Concurrent", config.concurrent.to_string()));
+    
+    items
 }
 
 /// Draws the UI for the configuration editor.
@@ -154,7 +159,25 @@ fn start_training(app: &mut App) {
 /// Helper function to modify a configuration value based on the selected index.
 fn change_config_value(app: &mut App, increase: bool) {
     let config = &mut app.config;
-    match app.config_editor.selected_index {
+    let selected_index = app.config_editor.selected_index;
+    
+    // Map the selected index to the actual config item
+    let actual_index = if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+        // With mutation parameters shown
+        selected_index
+    } else {
+        // Without mutation parameters, adjust indices
+        match selected_index {
+            0..=4 => selected_index, // Engine, Generations, Population, Elite, Activation
+            5 => 6, // Mutation Strategy (was 6)
+            6 => 7, // Fitness Func (was 7)
+            7 => 8, // Reproduction (was 8)
+            8 => 9, // Concurrent (was 9)
+            _ => selected_index,
+        }
+    };
+    
+    match actual_index {
         0 => {
             // Engine
             let current_engine_index = match config.engine {
@@ -202,24 +225,6 @@ fn change_config_value(app: &mut App, increase: bool) {
             }
         }
         4 => {
-            // Mutation Rate
-            let step = 0.01;
-            if increase {
-                config.mutation_rate += step;
-            } else {
-                config.mutation_rate = (config.mutation_rate - step).max(0.0);
-            }
-        }
-        5 => {
-            // Mutation Strength
-            let step = 0.01;
-            if increase {
-                config.mutation_strength += step;
-            } else {
-                config.mutation_strength = (config.mutation_strength - step).max(0.0);
-            }
-        }
-        6 => {
             // Activation
             let current_activation_index = match config.activation {
                 Activation::ClampedLinear => 0,
@@ -244,41 +249,109 @@ fn change_config_value(app: &mut App, increase: bool) {
                 _ => Activation::default(),
             };
         }
+        5 => {
+            // Mutation Rate (only shown for Modern strategy)
+            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+                let step = 0.01;
+                if increase {
+                    config.mutation_rate += step;
+                } else {
+                    config.mutation_rate = (config.mutation_rate - step).max(0.0);
+                }
+            } else {
+                // Mutation Strategy
+                config.mutation_strategy = match config.mutation_strategy {
+                    MutationStrategy::CppEquivalent => MutationStrategy::Modern,
+                    MutationStrategy::Modern => MutationStrategy::CppEquivalent,
+                };
+            }
+        }
+        6 => {
+            // Mutation Strength (only shown for Modern strategy)
+            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+                let step = 0.01;
+                if increase {
+                    config.mutation_strength += step;
+                } else {
+                    config.mutation_strength = (config.mutation_strength - step).max(0.0);
+                }
+            } else {
+                // Mutation Strategy (when not showing mutation params)
+                config.mutation_strategy = match config.mutation_strategy {
+                    MutationStrategy::CppEquivalent => MutationStrategy::Modern,
+                    MutationStrategy::Modern => MutationStrategy::CppEquivalent,
+                };
+            }
+        }
         7 => {
-            // Mutation Strategy
-            config.mutation_strategy = match config.mutation_strategy {
-                MutationStrategy::CppEquivalent => MutationStrategy::Modern,
-                MutationStrategy::Modern => MutationStrategy::CppEquivalent,
-            };
+            // Mutation Strategy (when showing mutation params) or Fitness Function
+            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+                config.mutation_strategy = match config.mutation_strategy {
+                    MutationStrategy::CppEquivalent => MutationStrategy::Modern,
+                    MutationStrategy::Modern => MutationStrategy::CppEquivalent,
+                };
+            } else {
+                // Fitness Function
+                let current_fitness_index = match config.fitness_func {
+                    FitnessFunc::CppEquivalent => 0,
+                    FitnessFunc::Balanced => 1,
+                    FitnessFunc::Performance => 2,
+                };
+                let next_index = if increase {
+                    (current_fitness_index + 1) % 3
+                } else {
+                    (current_fitness_index + 2) % 3
+                };
+                config.fitness_func = match next_index {
+                    0 => FitnessFunc::CppEquivalent,
+                    1 => FitnessFunc::Balanced,
+                    _ => FitnessFunc::Performance,
+                };
+            }
         }
         8 => {
-            // Concurrent
-            config.concurrent = !config.concurrent;
+            // Fitness Function (when showing mutation params) or Reproduction
+            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+                let current_fitness_index = match config.fitness_func {
+                    FitnessFunc::CppEquivalent => 0,
+                    FitnessFunc::Balanced => 1,
+                    FitnessFunc::Performance => 2,
+                };
+                let next_index = if increase {
+                    (current_fitness_index + 1) % 3
+                } else {
+                    (current_fitness_index + 2) % 3
+                };
+                config.fitness_func = match next_index {
+                    0 => FitnessFunc::CppEquivalent,
+                    1 => FitnessFunc::Balanced,
+                    _ => FitnessFunc::Performance,
+                };
+            } else {
+                // Reproduction Strategy
+                config.reproduction_strategy = match config.reproduction_strategy {
+                    ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
+                    ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
+                };
+            }
         }
         9 => {
-            // Fitness Function
-            let current_fitness_index = match config.fitness_func {
-                FitnessFunc::CppEquivalent => 0,
-                FitnessFunc::Balanced => 1,
-                FitnessFunc::Performance => 2,
-            };
-            let next_index = if increase {
-                (current_fitness_index + 1) % 3
+            // Reproduction Strategy (when showing mutation params) or Concurrent
+            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+                config.reproduction_strategy = match config.reproduction_strategy {
+                    ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
+                    ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
+                };
             } else {
-                (current_fitness_index + 2) % 3
-            };
-            config.fitness_func = match next_index {
-                0 => FitnessFunc::CppEquivalent,
-                1 => FitnessFunc::Balanced,
-                _ => FitnessFunc::Performance,
-            };
+                // Concurrent
+                config.concurrent = !config.concurrent;
+            }
         }
         10 => {
-            // Reproduction Strategy
-            config.reproduction_strategy = match config.reproduction_strategy {
-                ReproductionStrategy::CppEquivalent => ReproductionStrategy::Modern,
-                ReproductionStrategy::Modern => ReproductionStrategy::CppEquivalent,
-            };
+            // Concurrent (when showing mutation params)
+            if config.mutation_strategy == crate::config::MutationStrategy::Modern {
+                config.concurrent = !config.concurrent;
+            }
         }
         _ => {}
     }

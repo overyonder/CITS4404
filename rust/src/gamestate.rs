@@ -194,7 +194,7 @@ impl GameState {
     ///
     /// # Teaching Note
     /// This function contains the core physics logic. The order of operations is important:
-    /// move, then check for collisions. Collision checks use the ball's radius for accuracy.
+    /// move, then check for collisions. Collision checks use the ball's center position for accuracy.
     /// The paddle collision logic includes imparting some of the paddle's velocity to the ball,
     /// creating more dynamic and interesting rallies.
     pub fn update_ball(&mut self) {
@@ -208,7 +208,7 @@ impl GameState {
             self.ball_vel.1 *= -1.0;
         }
 
-        // Paddle collision detection
+        // Paddle collision detection - check before scoring
         let paddle1_box = (0.0, self.paddle1_pos);
         let paddle2_box = (WIDTH as f32, self.paddle2_pos);
 
@@ -227,7 +227,7 @@ impl GameState {
 
                 self.returns.0 += 1;
             }
-            // Right paddle collision
+        // Right paddle collision
         } else if self.ball_vel.0 > 0.0 && self.ball_pos.0 >= paddle2_box.0 {
             let paddle_top = paddle2_box.1 - PADDLE_HEIGHT / 2.0;
             let paddle_bottom = paddle2_box.1 + PADDLE_HEIGHT / 2.0;
@@ -283,11 +283,8 @@ impl GameState {
             }
         }
 
-        // Score detection. Note that we check if the *entire ball* has passed the screen edge.
-        // # Teaching Note
-        // A common mistake is to only check the ball's center (`ball_pos.0 < 0.0`).
-        // By checking `ball_pos.0 + BALL_RADIUS < 0.0`, we ensure the score only triggers
-        // after the entire ball is off-screen, which is physically accurate.
+        // Score detection. Check if the ball has passed the screen edge.
+        // This matches the C++ version which uses ball center position.
         if self.ball_pos.0 < 0.0 {
             self.scores.1 += 1; // Player 2 (right) scores
             self.paddle1_pos = (HEIGHT / 2) as f32;

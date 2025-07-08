@@ -1,14 +1,14 @@
 //! The simulation screen component.
 
 use crate::{
-    constants::{HEIGHT, PADDLE_HEIGHT, WIDTH},
+    constants::{HEIGHT, PADDLE_HEIGHT, WIDTH, BALL_RADIUS},
     tui::app::{App, AppState},
 };
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::Rect,
     style::Color,
-    widgets::canvas::{Canvas, Rectangle},
+    widgets::canvas::{Canvas, Circle, Rectangle},
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -38,29 +38,28 @@ pub fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
             .x_bounds([0.0, WIDTH as f64])
             .y_bounds([0.0, HEIGHT as f64])
             .paint(|ctx| {
-                // Draw ball
-                ctx.draw(&Rectangle {
+                // Draw ball as a filled circle for better visibility
+                ctx.draw(&Circle {
                     x: sim.game.ball_pos.0 as f64,
                     y: sim.game.ball_pos.1 as f64,
-                    width: 5.0,
-                    height: 5.0,
+                    radius: BALL_RADIUS as f64,
                     color: Color::Yellow,
                 });
 
-                // Draw left paddle (paddle1)
+                // Draw left paddle (paddle1) - consistent thickness with better positioning
                 ctx.draw(&Rectangle {
-                    x: 0.0,
-                    y: (sim.game.paddle1_pos - PADDLE_HEIGHT as f32 / 2.0) as f64,
-                    width: 5.0 as f64,
+                    x: 2.0, // Slightly offset from edge for better visibility
+                    y: (sim.game.paddle1_pos - PADDLE_HEIGHT / 2.0) as f64,
+                    width: 6.0, // Consistent paddle thickness
                     height: PADDLE_HEIGHT as f64,
                     color: Color::Blue,
                 });
 
-                // Draw right paddle (paddle2)
+                // Draw right paddle (paddle2) - consistent thickness with better positioning
                 ctx.draw(&Rectangle {
-                    x: (WIDTH) as f64,
-                    y: (sim.game.paddle2_pos - PADDLE_HEIGHT as f32 / 2.0) as f64,
-                    width: 5.0 as f64,
+                    x: (WIDTH - 8) as f64, // Position from right edge
+                    y: (sim.game.paddle2_pos - PADDLE_HEIGHT / 2.0) as f64,
+                    width: 6.0, // Consistent paddle thickness
                     height: PADDLE_HEIGHT as f64,
                     color: Color::Red,
                 });

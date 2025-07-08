@@ -71,7 +71,8 @@ pub trait Individual: Default + Clone + Send + Sync {
             crate::config::MutationStrategy::CppEquivalent => {
                 // C++ equivalent: mutate exactly one randomly selected gene with N(0, 1)
                 let gene_index = rng.random_range(0..TOTAL_WEIGHTS);
-                let mutation = rng.random_range(-1.0..=1.0); // Normal distribution approximation
+                let normal = rand_distr::Normal::new(0.0, 1.0).unwrap();
+                let mutation = normal.sample(rng);
                 weights[gene_index] += mutation;
             }
             crate::config::MutationStrategy::Modern => {

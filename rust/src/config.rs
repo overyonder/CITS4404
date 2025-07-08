@@ -144,7 +144,7 @@ impl Default for Config {
             concurrent: false,
             activation: Activation::ClampedLinear, // C++ default
             population_size: 128,     // C++ default
-            elite_count: 2,           // Used by Modern strategy, C++ calculates it
+            elite_count: 11,          // C++ default: 11 elite individuals
             fitness_func: FitnessFunc::CppEquivalent, // C++ default
             date_trained: None,
             reproduction_strategy: ReproductionStrategy::default(), // C++ default
