@@ -5,8 +5,6 @@ use crate::tui::{
     training::{TrainingState},
 };
 use crossterm::event::KeyCode;
-
-
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
@@ -395,7 +393,7 @@ fn draw_champion_genome(f: &mut Frame, training_state: &TrainingState, area: Rec
 
 fn draw_training_rate_chart(f: &mut Frame, training_state: &TrainingState, area: Rect) {
     let block = Block::default()
-        .title("Training Rate (gen/s)")
+        .title("Training Rate (Matches/sec)")
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded);
     let inner_area = block.inner(area);
@@ -579,7 +577,7 @@ fn draw_enhanced_info_panel(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("Live Metrics:", Style::default().fg(Color::Yellow)),
             ]),
             Line::from(format!("Matches: {}", training_state.total_matches_simulated)),
-            Line::from(format!("Rate: {:.2} gen/s", training_state.get_current_training_rate())),
+            Line::from(format!("Rate: {:.2} matches/s", training_state.get_current_training_rate())),
             Line::from(format!("Improve: {:.3} fit/s", training_state.get_current_improvement_rate())),
         ]);
     }

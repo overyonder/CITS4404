@@ -25,10 +25,13 @@ use crate::{
 };
 use rand::{rng, Rng};
 use rand_distr::Distribution;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tch::{nn, Device, Kind, Tensor};
 use tch::nn::Module; // Import Module trait for forward method
-use tracing::{error, warn, info, debug};
+use tracing::{debug, error, info, warn};
 
 /// A neural network individual that uses PyTorch tensors and CUDA for computation.
 ///
@@ -51,7 +54,7 @@ pub struct TorchIndividual {
     /// CPU cache of weights for genetic operations
     weights_cache: Vec<f32>,
     /// Flag to track if GPU weights are synchronized with CPU cache
-    sync_required: bool,
+    sync_required: AtomicBool,
 }
 
 impl Clone for TorchIndividual {
@@ -78,8 +81,8 @@ impl Individual for TorchIndividual {
         activation: Activation,
     ) -> [f32; OUTPUT_SIZE] {
         // Ensure weights are synchronized to GPU
-        if self.sync_required {
-            self.sync_weights_to_gpu();
+        if self.sync_required.swap(false, Ordering::SeqCst) {
+            self._sync_weights_to_gpu_impl();
         }
 
         // Convert input to PyTorch tensor on the appropriate device
@@ -160,7 +163,7 @@ impl Individual for TorchIndividual {
                 }
             }
         }
-        self.sync_required = true;
+        self.sync_required.store(true, Ordering::SeqCst);
     }
 
     fn weights_as_slice(&self) -> &[f32] {
@@ -168,7 +171,7 @@ impl Individual for TorchIndividual {
     }
 
     fn weights_as_mut_slice(&mut self) -> &mut [f32] {
-        self.sync_required = true;
+        self.sync_required.store(true, Ordering::SeqCst);
         &mut self.weights_cache
     }
 }
@@ -207,18 +210,24 @@ impl TorchIndividual {
             .add_fn(|x| x.relu())
             .add(nn::linear(&vs.root(), HIDDEN2_SIZE as i64, OUTPUT_SIZE as i64, Default::default()));
 
+        // Properly initialize weights with random values
+        let mut weights_cache = vec![0.0; TOTAL_WEIGHTS];
+        let mut rng = rng();
+        for weight in &mut weights_cache {
+            *weight = rng.random_range(-1.0..=1.0);
+        }
+
         // Initialize weights randomly
-        let mut individual = Self {
+        let individual = Self {
             device,
             model: Arc::new(Mutex::new(model)),
             vs: Arc::new(Mutex::new(vs)),
-            weights_cache: vec![0.0; TOTAL_WEIGHTS],
-            sync_required: true,
+            weights_cache,
+            sync_required: AtomicBool::new(true),
         };
 
         // Set the random weights
-        individual.mutate(&mut rng(), &Config::default());
-        individual.sync_weights_to_gpu();
+        individual._sync_weights_to_gpu_impl();
         Ok(individual)
     }
 
@@ -235,46 +244,37 @@ impl TorchIndividual {
         }
 
         self.weights_cache.copy_from_slice(weights);
-        
-        let weights_tensor = Tensor::f_from_slice(weights)
-            .map_err(|e| format!("Failed to create weights tensor: {}", e))
-            .unwrap_or_else(|_| {
-                warn!("Failed to create weights tensor, using zeros");
-                Tensor::zeros([weights.len() as i64], (Kind::Float, self.device))
-            })
-            .to_device(self.device)
-            .to_kind(Kind::Float);
-
-        // Map flat weights to network parameters
-        let mut weight_idx = 0;
-        
-        // Layer 1: Input -> Hidden1 (including biases)
-        let _l1_weights = weights_tensor.narrow(0, weight_idx as i64, L1_WEIGHTS as i64);
-        weight_idx += L1_WEIGHTS;
-        
-        // Layer 2: Hidden1 -> Hidden2 (including biases)  
-        let _l2_weights = weights_tensor.narrow(0, weight_idx as i64, L2_WEIGHTS as i64);
-        weight_idx += L2_WEIGHTS;
-        
-        // Layer 3: Hidden2 -> Output (including biases)
-        let _l3_weights = weights_tensor.narrow(0, weight_idx as i64, L3_WEIGHTS as i64);
-
-        // Apply weights to the model (this requires accessing internal parameters)
-        // Note: This is a simplified version - actual implementation would need
-        // to properly map weights to the named parameters in the VarStore
-        
-        self.sync_required = false;
+        self.sync_required.store(true, Ordering::SeqCst);
     }
 
     /// Synchronizes CPU weight cache to GPU tensors.
-    fn sync_weights_to_gpu(&self) {
-        if !self.sync_required {
-            return;
-        }
-        
-        // Update GPU tensors with current CPU weights
-        // Implementation would map weights_cache to model parameters
+    fn _sync_weights_to_gpu_impl(&self) {
         debug!("Synchronizing weights to GPU");
+        tch::no_grad(|| {
+            let vs = self.vs.lock().unwrap();
+            let mut variables = vs.trainable_variables();
+            let mut offset = 0;
+
+            for param in variables.iter_mut() {
+                let numel = param.numel();
+                if offset + numel > self.weights_cache.len() {
+                    error!(
+                        "Weight slice out of bounds during GPU sync. Offset: {}, Numel: {}, Cache size: {}",
+                        offset,
+                        numel,
+                        self.weights_cache.len()
+                    );
+                    return;
+                }
+                let weight_slice = &self.weights_cache[offset..offset + numel];
+                let new_data = Tensor::f_from_slice(weight_slice)
+                    .unwrap()
+                    .to(self.device)
+                    .view_(param.size().as_slice());
+                param.set_data(&new_data);
+                offset += numel;
+            }
+        });
     }
 
     /// Extracts current weights from GPU tensors to CPU cache.
@@ -283,7 +283,7 @@ impl TorchIndividual {
         // Extract current parameter values from the model
         // Implementation would read from model parameters to weights_cache
         debug!("Synchronizing weights from GPU");
-        self.sync_required = false;
+        self.sync_required.store(false, Ordering::SeqCst);
     }
 }
 
@@ -334,189 +334,103 @@ impl TorchBatchEngine {
         config: &Config,
     ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         let population_size = individuals.len();
-        debug!("Starting PyTorch batch evaluation for {} individuals", population_size);
-        
-        if population_size == 0 {
-            return Ok(Vec::new());
+        debug!("Starting PyTorch round-robin evaluation for {} individuals", population_size);
+
+        if population_size < 2 {
+            return Ok(vec![0.0; population_size]);
         }
 
-        // Calculate optimal batch size for this population
-        let optimal_batch_size = self.calculate_optimal_batch_size(population_size);
-        debug!("Using batch size: {} for population size: {}", optimal_batch_size, population_size);
-
-        // Prepare all population weights as a single tensor [population_size, TOTAL_WEIGHTS]
+        // 1. Prepare all population weights as a single tensor
         let mut all_weights = Vec::with_capacity(population_size * TOTAL_WEIGHTS);
         for individual in individuals {
             all_weights.extend_from_slice(individual.weights_as_slice());
         }
-
-        let population_weights = Tensor::f_from_slice(&all_weights)
-            .map_err(|e| format!("Failed to create population weights tensor: {}", e))?
+        let population_weights = Tensor::f_from_slice(&all_weights)?
             .to_device(self.device)
             .view([population_size as i64, TOTAL_WEIGHTS as i64]);
 
-        // Run batch tournament evaluation
-        let fitness_scores = self.evaluate_population_tournaments(
-            &population_weights, 
-            population_size, 
-            optimal_batch_size,
-            config
-        )?;
-
-        debug!("PyTorch batch evaluation completed for {} individuals", population_size);
-        Ok(fitness_scores)
-    }
-
-    /// Calculates optimal batch size based on GPU memory and population size.
-    fn calculate_optimal_batch_size(&self, population_size: usize) -> usize {
-        // Target batch sizes that work well with GPU memory hierarchy
-        let target_batch_sizes = [32, 64, 128, 256, 512];
+        // 2. Generate all opponent pairs for a round-robin tournament
+        let matchups: Vec<(usize, usize)> = (0..population_size)
+            .flat_map(|i| (0..population_size).map(move |j| (i, j)))
+            .filter(|(i, j)| i != j)
+            .collect();
         
-        // Find the largest batch size that provides good GPU utilization
-        for &batch_size in target_batch_sizes.iter().rev() {
-            if population_size >= batch_size {
-                return batch_size.min(self.max_batch_size);
-            }
+        let total_matches = matchups.len();
+        info!("Running PyTorch round-robin tournament with {} total matches.", total_matches);
+
+        // Aggregate fitness scores directly on the GPU to avoid sync bottlenecks
+        let mut final_fitness_scores_gpu = Tensor::zeros(&[population_size as i64], (Kind::Float, self.device));
+        let match_batch_size = (16384).min(total_matches); // Process matches in chunks
+
+        // 3. Process matches in batches
+        for (batch_num, batch_matchups) in matchups.chunks(match_batch_size).enumerate() {
+            let current_batch_size = batch_matchups.len();
+            debug!("Processing match batch {}/{} ({} matches)",
+                batch_num + 1,
+                (total_matches + match_batch_size - 1) / match_batch_size,
+                current_batch_size
+            );
+            // 4. Gather weights for player 1 and player 2 for the batch
+            let p1_indices: Vec<i64> = batch_matchups.iter().map(|(i, _)| *i as i64).collect();
+            let p2_indices: Vec<i64> = batch_matchups.iter().map(|(_, j)| *j as i64).collect();
+            
+            let p1_indices_tensor = Tensor::from_slice(&p1_indices).to(self.device);
+            let p2_indices_tensor = Tensor::from_slice(&p2_indices).to(self.device);
+            let p1_weights = population_weights.index_select(0, &p1_indices_tensor);
+            let p2_weights = population_weights.index_select(0, &p2_indices_tensor);
+
+            // 5. Evaluate the batch of matches
+            let (p1_fitness, p2_fitness) = self.evaluate_match_batch(&p1_weights, &p2_weights, current_batch_size, config)?;
+            
+            // 6. Aggregate fitness scores on the GPU
+            final_fitness_scores_gpu.index_add_(0, &p1_indices_tensor, &p1_fitness);
+            final_fitness_scores_gpu.index_add_(0, &p2_indices_tensor, &p2_fitness);
         }
         
-        // For small populations, use the population size itself
-        population_size.min(self.max_batch_size)
+        // 7. Transfer final aggregated scores back to CPU once
+        let final_fitness_scores = Vec::<f32>::try_from(final_fitness_scores_gpu.to(Device::Cpu))?;
+        debug!("PyTorch round-robin evaluation completed.");
+        Ok(final_fitness_scores)
     }
 
-    /// Evaluates tournaments using vectorized PyTorch operations.
+    /// Evaluates a batch of matches between two sets of players.
     ///
     /// # Teaching Note: Vectorized Game Simulation
     /// This implementation runs multiple Pong games simultaneously using batch tensors:
-    /// - **Batch Neural Networks**: Process multiple player decisions in parallel
-    /// - **Vectorized Game Logic**: Simulate ball physics and scoring for many games
-    /// - **Parallel Fitness Calculation**: Compute fitness metrics across batch dimension
-    fn evaluate_population_tournaments(
+    /// - **Batch Neural Networks**: Processes multiple player decisions in parallel
+    /// - **Vectorized Game Logic**: Simulates ball physics and scoring for many games
+    /// - **Parallel Fitness Calculation**: Computes fitness metrics across batch dimension
+    fn evaluate_match_batch(
         &self,
-        population_weights: &Tensor,
-        population_size: usize,
+        player1_weights: &Tensor,
+        player2_weights: &Tensor,
         batch_size: usize,
         config: &Config,
-    ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-        let mut fitness_scores = vec![0.0f32; population_size];
-        
-        // Process tournaments in batches to manage GPU memory
-        let num_batches = (population_size + batch_size - 1) / batch_size;
-        
-        for batch_idx in 0..num_batches {
-            let start_idx = batch_idx * batch_size;
-            let end_idx = std::cmp::min(start_idx + batch_size, population_size);
-            let current_batch_size = end_idx - start_idx;
-            
-            if current_batch_size == 0 {
-                continue;
-            }
-
-            debug!("Processing batch {}/{}: individuals {}-{}", 
-                   batch_idx + 1, num_batches, start_idx, end_idx - 1);
-
-            // Extract weights for current batch
-            let batch_weights = population_weights.narrow(0, start_idx as i64, current_batch_size as i64);
-            
-            // Run vectorized tournament for this batch
-            let batch_fitness = self.evaluate_batch_tournament(&batch_weights, current_batch_size, config)?;
-            
-            // Store results
-            for (i, fitness) in batch_fitness.iter().enumerate() {
-                if start_idx + i < fitness_scores.len() {
-                    fitness_scores[start_idx + i] = *fitness;
-                }
-            }
-        }
-
-        Ok(fitness_scores)
-    }
-
-    /// Evaluates a single match between two individuals using PyTorch tensors.
-    ///
-    /// # Teaching Note: TRUE GPU Batch Processing with PyTorch
-    /// This method demonstrates proper PyTorch GPU batch processing:
-    /// - **Batch Neural Networks**: Process all players simultaneously using batch dimensions
-    /// - **Vectorized Game Logic**: Run multiple games in parallel using tensor operations
-    /// - **GPU Memory Efficiency**: Keep all operations on GPU, minimize CPU transfers
-    /// - **True Parallelism**: Leverage PyTorch's CUDA kernels for maximum throughput
-    fn evaluate_batch_tournament(
-        &self,
-        batch_weights: &Tensor,
-        batch_size: usize,
-        config: &Config,
-    ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    ) -> Result<(Tensor, Tensor), Box<dyn std::error::Error>> {
         // --- 1. Vectorized Initialization ---
-        // All game states are now tensors of size [batch_size]
-        let mut ball_x = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device); // Center start
-        let mut ball_y = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device); // Center start
+        let mut ball_x = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device);
+        let mut ball_y = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device);
 
         let mut ball_vx = Tensor::from(BALL_INITIAL_VEL_X as f64).repeat(&[batch_size as i64]).to(self.device);
         if config.random_ball_direction {
-            let rand_signs =
-                (Tensor::randint(2, &[batch_size as i64], (Kind::Float, self.device)) * 2.0 - 1.0)
-                    .to_kind(Kind::Double);
+            let rand_signs = (Tensor::randint(2, &[batch_size as i64], (Kind::Float, self.device)) * 2.0 - 1.0).to_kind(Kind::Double);
             ball_vx *= rand_signs;
         }
         let mut ball_vy = Tensor::from(BALL_INITIAL_VEL_Y as f64).repeat(&[batch_size as i64]).to(self.device);
 
-        let mut paddle1_y = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device); // Center start
-        let mut paddle2_y = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device); // Center start
+        let mut paddle1_y = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device);
+        let mut paddle2_y = Tensor::from(0.5).repeat(&[batch_size as i64]).to(self.device);
 
-        let mut fitness = Tensor::zeros(&[batch_size as i64], (Kind::Float, self.device));
-        let mut successful_returns1 =
-            Tensor::zeros(&[batch_size as i64], (Kind::Float, self.device));
-        let mut successful_returns2 =
-            Tensor::zeros(&[batch_size as i64], (Kind::Float, self.device));
-
-        // --- Correctly extract and reshape weights and biases from the flat tensor ---
-        let l1_with_bias = batch_weights
-            .narrow(1, 0, L1_WEIGHTS as i64)
-            .view([
-                batch_size as i64,
-                HIDDEN1_SIZE as i64,
-                (INPUT_SIZE + 1) as i64,
-            ]);
-        let l1_weights = l1_with_bias
-            .slice(2, 0, INPUT_SIZE as i64, 1)
-            .transpose(1, 2)
-            .to_kind(Kind::Double);
-        let l1_bias = l1_with_bias
-            .select(2, INPUT_SIZE as i64)
-            .to_kind(Kind::Double);
-
-        let l2_with_bias = batch_weights
-            .narrow(1, L1_WEIGHTS as i64, L2_WEIGHTS as i64)
-            .view([
-                batch_size as i64,
-                HIDDEN2_SIZE as i64,
-                (HIDDEN1_SIZE + 1) as i64,
-            ]);
-        let l2_weights = l2_with_bias
-            .slice(2, 0, HIDDEN1_SIZE as i64, 1)
-            .transpose(1, 2)
-            .to_kind(Kind::Double);
-        let l2_bias = l2_with_bias
-            .select(2, HIDDEN1_SIZE as i64)
-            .to_kind(Kind::Double);
-
-        let l3_with_bias = batch_weights
-            .narrow(
-                1,
-                (L1_WEIGHTS + L2_WEIGHTS) as i64,
-                L3_WEIGHTS as i64,
-            )
-            .view([
-                batch_size as i64,
-                OUTPUT_SIZE as i64,
-                (HIDDEN2_SIZE + 1) as i64,
-            ]);
-        let l3_weights = l3_with_bias
-            .slice(2, 0, HIDDEN2_SIZE as i64, 1)
-            .transpose(1, 2)
-            .to_kind(Kind::Double);
-        let l3_bias = l3_with_bias
-            .select(2, HIDDEN2_SIZE as i64)
-            .to_kind(Kind::Double);
+        let mut successful_returns1 = Tensor::zeros(&[batch_size as i64], (Kind::Float, self.device));
+        let mut successful_returns2 = Tensor::zeros(&[batch_size as i64], (Kind::Float, self.device));
+        let mut p1_score_count = Tensor::zeros(&[batch_size as i64], (Kind::Float, self.device));
+        let mut p2_score_count = Tensor::zeros(&[batch_size as i64], (Kind::Float, self.device));
+        
+        // --- Extract and reshape weights for both players ---
+        let (l1_w1, l1_b1, l2_w1, l2_b1, l3_w1, l3_b1) =
+            self.extract_and_reshape_weights(player1_weights, batch_size)?;
+        let (l1_w2, l1_b2, l2_w2, l2_b2, l3_w2, l3_b2) =
+            self.extract_and_reshape_weights(player2_weights, batch_size)?;
 
         // --- 2. Main Vectorized Simulation Loop ---
         for _ in 0..MAX_STEPS {
@@ -525,82 +439,65 @@ impl TorchBatchEngine {
             ball_y += &ball_vy;
 
             // --- 2b. Neural Network Forward Pass for ALL paddles ---
-            // Create a single large input tensor for all games
             let paddle1_inputs = Tensor::stack(
                 &[
-                    &ball_x,
-                    &ball_y,
-                    &ball_vx,
-                    &ball_vy,
-                    &paddle1_y,
-                    &paddle2_y,
+                    &ball_x, &ball_y, &ball_vx, &ball_vy, &paddle1_y, &paddle2_y,
                     &Tensor::ones(&[batch_size as i64], (Kind::Double, self.device)),
                     &Tensor::zeros(&[batch_size as i64], (Kind::Double, self.device)),
                 ],
                 1,
-            )
-            .to(self.device);
+            ).to(self.device);
 
             let paddle2_inputs = Tensor::stack(
                 &[
-                    // Flipped perspective for player 2
-                    &(1.0 - &ball_x),
-                    &(1.0 - &ball_y),
-                    &(-&ball_vx),
-                    &(-&ball_vy),
-                    &paddle2_y,
-                    &paddle1_y,
+                    &(1.0 - &ball_x), &(1.0 - &ball_y), &(-&ball_vx), &(-&ball_vy),
+                    &paddle2_y, &paddle1_y,
                     &Tensor::zeros(&[batch_size as i64], (Kind::Double, self.device)),
                     &Tensor::ones(&[batch_size as i64], (Kind::Double, self.device)),
                 ],
                 1,
-            )
-            .to(self.device);
+            ).to(self.device);
 
             // Batched forward pass for paddle 1
-            let h1_1 = (paddle1_inputs.unsqueeze(1).bmm(&l1_weights) + l1_bias.unsqueeze(1)).relu();
-            let h2_1 = (h1_1.bmm(&l2_weights) + l2_bias.unsqueeze(1)).relu();
-            let output1 = (h2_1.bmm(&l3_weights) + l3_bias.unsqueeze(1)).tanh().squeeze();
+            let h1_1 = (paddle1_inputs.unsqueeze(1).bmm(&l1_w1) + l1_b1.unsqueeze(1)).relu();
+            let h2_1 = (h1_1.bmm(&l2_w1) + l2_b1.unsqueeze(1)).relu();
+            let output1 = (h2_1.bmm(&l3_w1) + l3_b1.unsqueeze(1)).tanh().squeeze();
 
             // Batched forward pass for paddle 2
-            let h1_2 = (paddle2_inputs.unsqueeze(1).bmm(&l1_weights) + l1_bias.unsqueeze(1)).relu();
-            let h2_2 = (h1_2.bmm(&l2_weights) + l2_bias.unsqueeze(1)).relu();
-            let output2 = (h2_2.bmm(&l3_weights) + l3_bias.unsqueeze(1)).tanh().squeeze();
+            let h1_2 = (paddle2_inputs.unsqueeze(1).bmm(&l1_w2) + l1_b2.unsqueeze(1)).relu();
+            let h2_2 = (h1_2.bmm(&l2_w2) + l2_b2.unsqueeze(1)).relu();
+            let output2 = (h2_2.bmm(&l3_w2) + l3_b2.unsqueeze(1)).tanh().squeeze();
 
             // --- 2c. Update Paddle Positions ---
-            paddle1_y = (&paddle1_y + &output1 * PADDLE_MAX_VEL as f64)
-                .clamp(0.0, 1.0 - PADDLE_HEIGHT as f64);
-            paddle2_y = (&paddle2_y + &output2 * PADDLE_MAX_VEL as f64)
-                .clamp(0.0, 1.0 - PADDLE_HEIGHT as f64);
+            paddle1_y = (&paddle1_y + &output1 * PADDLE_MAX_VEL as f64).clamp(0.0, 1.0 - PADDLE_HEIGHT as f64);
+            paddle2_y = (&paddle2_y + &output2 * PADDLE_MAX_VEL as f64).clamp(0.0, 1.0 - PADDLE_HEIGHT as f64);
 
             // --- 2d. Vectorized Collision Detection ---
-            // Top/bottom walls
             let hit_top = ball_y.le(0.0);
             let hit_bottom = ball_y.ge(1.0);
             ball_vy = ball_vy.where_self(&hit_top.logical_or(&hit_bottom), &-&ball_vy);
 
             // Paddle 1 collision
-            let hit_paddle1_x = ball_x.le(0.05); // Simplified paddle width
-            let hit_paddle1_y = ball_y
-                .ge_tensor(&paddle1_y)
-                .logical_and(&ball_y.le_tensor(&(&paddle1_y + PADDLE_HEIGHT as f64)));
+            let hit_paddle1_x = ball_x.le(0.05);
+            let hit_paddle1_y = ball_y.ge_tensor(&paddle1_y).logical_and(&ball_y.le_tensor(&(&paddle1_y + PADDLE_HEIGHT as f64)));
             let hit_paddle1 = hit_paddle1_x.logical_and(&hit_paddle1_y);
             ball_vx = ball_vx.where_self(&hit_paddle1, &ball_vx.abs());
             successful_returns1 += hit_paddle1.to_kind(Kind::Float);
 
             // Paddle 2 collision
-            let hit_paddle2_x = ball_x.ge(1.0 - 0.05); // Simplified paddle width
-            let hit_paddle2_y = ball_y
-                .ge_tensor(&paddle2_y)
-                .logical_and(&ball_y.le_tensor(&(&paddle2_y + PADDLE_HEIGHT as f64)));
+            let hit_paddle2_x = ball_x.ge(1.0 - 0.05);
+            let hit_paddle2_y = ball_y.ge_tensor(&paddle2_y).logical_and(&ball_y.le_tensor(&(&paddle2_y + PADDLE_HEIGHT as f64)));
             let hit_paddle2 = hit_paddle2_x.logical_and(&hit_paddle2_y);
             ball_vx = ball_vx.where_self(&hit_paddle2, &(-&ball_vx.abs()));
             successful_returns2 += hit_paddle2.to_kind(Kind::Float);
 
-            // --- 2e. Check for scoring ---
-            let p2_scores = ball_x.lt(0.0);
-            let p1_scores = ball_x.gt(1.0);
-            let goal_scored = p1_scores.logical_or(&p2_scores);
+            // --- 2e. Check for scoring and update counts ---
+            let p2_scores_this_step = ball_x.lt(0.0);
+            let p1_scores_this_step = ball_x.gt(1.0);
+            p1_score_count += p1_scores_this_step.to_kind(Kind::Float);
+            p2_score_count += p2_scores_this_step.to_kind(Kind::Float);
+            
+            let goal_scored = p1_scores_this_step.logical_or(&p2_scores_this_step);
 
             // On score, reset ball state for those games
             if bool::try_from(goal_scored.any())? {
@@ -608,27 +505,55 @@ impl TorchBatchEngine {
                 ball_y = ball_y.where_self(&goal_scored, &Tensor::from(0.5).to(self.device));
 
                 let new_vx = if config.random_ball_direction {
-                    (Tensor::randint(
-                        2,
-                        &[batch_size as i64],
-                        (Kind::Float, self.device),
-                    ) * 2.0
-                        - 1.0)
-                        .to_kind(Kind::Double)
-                        * (BALL_INITIAL_VEL_X as f64)
+                    (Tensor::randint(2, &[batch_size as i64], (Kind::Float, self.device)) * 2.0 - 1.0).to_kind(Kind::Double) * (BALL_INITIAL_VEL_X as f64)
                 } else {
                     Tensor::from(BALL_INITIAL_VEL_X as f64).repeat(&[batch_size as i64]).to(self.device)
                 };
                 ball_vx = ball_vx.where_self(&goal_scored, &new_vx);
             }
-
-            // Increment fitness for active games
-            fitness += 1.0;
         }
 
-        // --- 3. Final Fitness Calculation ---
-        let final_fitness = fitness + successful_returns1 * 100.0 + successful_returns2 * 100.0;
+        // --- 3. Final Fitness Calculation (Competitive) ---
+        let time_alive_fitness = Tensor::from((MAX_STEPS as f32) / 10.0).to(self.device);
+        let fitness1 = &time_alive_fitness + &successful_returns1 * 100.0 + &p1_score_count * 1000.0 - &p2_score_count * 500.0;
+        let fitness2 = &time_alive_fitness + &successful_returns2 * 100.0 + &p2_score_count * 1000.0 - &p1_score_count * 500.0;
 
-        Ok(Vec::<f32>::try_from(final_fitness.to(Device::Cpu))?)
+        Ok((fitness1, fitness2))
     }
-} 
+
+    /// Helper function to extract and reshape weights from a flat tensor.
+    fn extract_and_reshape_weights(
+        &self,
+        batch_weights: &Tensor,
+        batch_size: usize,
+    ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor, Tensor), Box<dyn std::error::Error>> {
+        // L1 weights and biases
+        let l1_with_bias = batch_weights.narrow(1, 0, L1_WEIGHTS as i64).view([
+            batch_size as i64,
+            HIDDEN1_SIZE as i64,
+            (INPUT_SIZE + 1) as i64,
+        ]);
+        let l1_weights = l1_with_bias.slice(2, 0, INPUT_SIZE as i64, 1).transpose(1, 2).to_kind(Kind::Double);
+        let l1_bias = l1_with_bias.select(2, INPUT_SIZE as i64).to_kind(Kind::Double);
+
+        // L2 weights and biases
+        let l2_with_bias = batch_weights.narrow(1, L1_WEIGHTS as i64, L2_WEIGHTS as i64).view([
+            batch_size as i64,
+            HIDDEN2_SIZE as i64,
+            (HIDDEN1_SIZE + 1) as i64,
+        ]);
+        let l2_weights = l2_with_bias.slice(2, 0, HIDDEN1_SIZE as i64, 1).transpose(1, 2).to_kind(Kind::Double);
+        let l2_bias = l2_with_bias.select(2, HIDDEN1_SIZE as i64).to_kind(Kind::Double);
+
+        // L3 weights and biases
+        let l3_with_bias = batch_weights.narrow(1, (L1_WEIGHTS + L2_WEIGHTS) as i64, L3_WEIGHTS as i64).view([
+            batch_size as i64,
+            OUTPUT_SIZE as i64,
+            (HIDDEN2_SIZE + 1) as i64,
+        ]);
+        let l3_weights = l3_with_bias.slice(2, 0, HIDDEN2_SIZE as i64, 1).transpose(1, 2).to_kind(Kind::Double);
+        let l3_bias = l3_with_bias.select(2, HIDDEN2_SIZE as i64).to_kind(Kind::Double);
+
+        Ok((l1_weights, l1_bias, l2_weights, l2_bias, l3_weights, l3_bias))
+    }
+}

@@ -770,10 +770,15 @@ impl<I: Individual> Population<I> {
             let best_individual = &self.individuals[sorted_indices[0]];
 
             // Calculate training performance metrics
-            let total_matches_this_gen = (self.config.population_size * (self.config.population_size - 1)) as u64;
+            let total_matches_this_gen = match self.config.engine {
+                crate::config::Engine::Cpu => (self.config.population_size * (self.config.population_size - 1)) as u64,
+                // For GPU engines, each individual is evaluated once in a batch, equivalent to 1 match.
+                _ => self.config.population_size as u64,
+            };
+
             total_matches_simulated += total_matches_this_gen;
             let elapsed_time = start_time.elapsed().as_secs_f32();
-            let training_rate = if elapsed_time > 0.0 { (gen + 1) as f32 / elapsed_time } else { 0.0 };
+            let matches_per_second = if elapsed_time > 0.0 { total_matches_simulated as f32 / elapsed_time } else { 0.0 };
             
             // Track improvement and convergence
             let gen_usize = gen as usize;
@@ -823,7 +828,7 @@ impl<I: Individual> Population<I> {
                 best_fitness: best_fitness as f32,
                 genome_weights: best_individual.weights_as_slice().to_vec(),
                 total_matches_simulated,
-                training_rate,
+                training_rate: matches_per_second,
                 improvement_rate,
             };
 
@@ -845,13 +850,12 @@ impl<I: Individual> Population<I> {
                 };
                 
                 info!(
-                    "Gen: {:3} | Best: {:7.2} | Avg: {:7.2} | Worst: {:7.2} | Matches: {:8} | Rate: {:5.2} gen/s | Improve: {:6.3} fit/s | Diversity: ({:.3}, {:.3}) | Max: {}",
+                    "Gen: {:3} | Best: {:7.2} | Avg: {:7.2} | Worst: {:7.2} | Matches/sec: {:7.0} | Improve: {:6.3} fit/s | Diversity: ({:.3}, {:.3}) | Max: {}",
                     gen + 1,
                     best_fitness,
                     average_fitness,
                     worst_fitness,
-                    total_matches_simulated,
-                    training_rate,
+                    matches_per_second,
                     improvement_rate,
                     diversity_metrics.0,
                     diversity_metrics.1,
