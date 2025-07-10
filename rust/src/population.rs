@@ -28,6 +28,8 @@ use crate::{
     tui::training::TrainingMessage,
     engines::gpu::GpuBatchEngine,
 };
+#[cfg(feature = "torch")]
+use crate::engines::torch::TorchBatchEngine;
 use rand::{prelude::*, rng};
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,6 +79,11 @@ pub struct Population<I: Individual> {
     /// GPU batch processing engine for mass parallel evaluation
     /// Only initialized when GPU engine is selected
     gpu_batch_engine: Option<GpuBatchEngine>,
+    
+    /// PyTorch batch processing engine for GPU-accelerated neural network evaluation
+    /// Only initialized when Torch engine is selected
+    #[cfg(feature = "torch")]
+    torch_batch_engine: Option<TorchBatchEngine>,
 }
 
 impl<I: Individual> Population<I> {
@@ -113,6 +120,25 @@ impl<I: Individual> Population<I> {
             None
         };
         
+        // Initialize PyTorch batch engine if using Torch
+        #[cfg(feature = "torch")]
+        let torch_batch_engine = if matches!(config.engine, crate::config::Engine::Torch) {
+            debug!("Initializing PyTorch batch engine...");
+            match TorchBatchEngine::new(pop_size * 2) { // 2x for safety margin
+                Ok(engine) => {
+                    info!("PyTorch batch engine initialized for population size {}", pop_size);
+                    Some(engine)
+                }
+                Err(e) => {
+                    warn!("Failed to initialize PyTorch batch engine: {}. Falling back to CPU evaluation.", e);
+                    warn!("PyTorch functionality is not available. Using CPU fallback mode.");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        
         debug!("Creating {} individuals...", pop_size);
         let individuals: Vec<I> = (0..pop_size)
             .enumerate()
@@ -133,6 +159,8 @@ impl<I: Individual> Population<I> {
             fitness,
             config,
             gpu_batch_engine,
+            #[cfg(feature = "torch")]
+            torch_batch_engine,
         }
     }
 
@@ -261,6 +289,75 @@ impl<I: Individual> Population<I> {
             });
         }
         trace!("Concurrent full tournament finished.");
+    }
+
+    /// PyTorch batch fitness evaluation with GPU-accelerated neural networks.
+    ///
+    /// # Teaching Note: PyTorch GPU Computing for Evolutionary Algorithms
+    /// This function demonstrates production-ready PyTorch GPU computing patterns:
+    /// - **Batch Tournament Processing**: Run hundreds of tournaments simultaneously
+    /// - **Vectorized Neural Networks**: Process multiple individuals in parallel
+    /// - **GPU Memory Management**: Efficient tensor operations and memory usage
+    /// - **Automatic Fallback**: Graceful degradation to CPU if GPU fails
+    ///
+    /// This approach achieves similar performance to the WGSL implementation but
+    /// leverages PyTorch's mature ecosystem and automatic optimization.
+    #[cfg(feature = "torch")]
+    pub fn evaluate_fitness_torch_batch(&mut self, tx: &Option<mpsc::Sender<TrainingMessage>>) {
+        trace!("Checking PyTorch batch engine availability...");
+        
+        // Check if PyTorch batch engine is available
+        if self.torch_batch_engine.is_none() {
+            debug!("PyTorch batch engine not available, falling back to CPU evaluation");
+            if self.config.concurrent {
+                self.evaluate_fitness_concurrent(tx);
+            } else {
+                self.evaluate_fitness(tx);
+            }
+            return;
+        }
+        
+        trace!("Resetting fitness scores for PyTorch batch evaluation.");
+        for fitness in self.fitness.iter() {
+            fitness.store(0, Ordering::Relaxed);
+        }
+
+        let pop_size = self.config.population_size;
+        trace!("Starting PyTorch batch evaluation for {} individuals.", pop_size);
+
+        // Try PyTorch batch evaluation
+        if let Some(batch_engine) = &mut self.torch_batch_engine {
+            match batch_engine.evaluate_population(&self.individuals, &self.config) {
+                Ok(fitness_values) => {
+                    // Success: update fitness scores from PyTorch results
+                    for (i, &fitness_value) in fitness_values.iter().enumerate() {
+                        if i < self.fitness.len() {
+                            // Convert single fitness value to packed format (primary = fitness, secondary = 0)
+                            let packed_fitness = ((fitness_value as u32 as u64) << 32) | 0u64;
+                            self.fitness[i].store(packed_fitness, Ordering::Relaxed);
+                        }
+                    }
+                    trace!("PyTorch batch evaluation completed successfully.");
+                }
+                Err(e) => {
+                    warn!("PyTorch batch evaluation failed: {}. Falling back to CPU evaluation.", e);
+                    // Fallback to CPU evaluation
+                    if self.config.concurrent {
+                        self.evaluate_fitness_concurrent(tx);
+                    } else {
+                        self.evaluate_fitness(tx);
+                    }
+                }
+            }
+        } else {
+            // This shouldn't happen, but handle it gracefully
+            warn!("PyTorch batch engine unexpectedly unavailable, using CPU fallback");
+            if self.config.concurrent {
+                self.evaluate_fitness_concurrent(tx);
+            } else {
+                self.evaluate_fitness(tx);
+            }
+        }
     }
 
     /// Batch GPU fitness evaluation with fallback to CPU.
@@ -628,13 +725,21 @@ impl<I: Individual> Population<I> {
             // Phase 1: Fitness Evaluation
             // All individuals compete to determine their relative performance
             trace!("Evaluating fitness...");
-            let use_gpu = matches!(self.config.engine, crate::config::Engine::Gpu);
-            if use_gpu {
-                self.evaluate_fitness_gpu_batch(&tx);
-            } else if self.config.concurrent {
-                self.evaluate_fitness_concurrent(&tx);
-            } else {
-                self.evaluate_fitness(&tx);
+            match self.config.engine {
+                crate::config::Engine::Gpu => {
+                    self.evaluate_fitness_gpu_batch(&tx);
+                }
+                #[cfg(feature = "torch")]
+                crate::config::Engine::Torch => {
+                    self.evaluate_fitness_torch_batch(&tx);
+                }
+                crate::config::Engine::Cpu => {
+                    if self.config.concurrent {
+                        self.evaluate_fitness_concurrent(&tx);
+                    } else {
+                        self.evaluate_fitness(&tx);
+                    }
+                }
             }
             trace!("Fitness evaluation complete.");
 

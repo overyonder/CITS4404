@@ -129,8 +129,11 @@ fn run_cli(args: Args) {
     let engine = match args.engine.as_str() {
         "cpu" => Engine::Cpu,
         "gpu" => Engine::Gpu,
+        #[cfg(feature = "torch")]
+        "torch" | "pytorch" => Engine::Torch,
         other => {
-            error!("Unknown engine: {}. Exiting.", other);
+            error!("Unknown engine: {}. Available options: cpu, gpu{}. Exiting.", other, 
+                   if cfg!(feature = "torch") { ", torch" } else { "" });
             return;
         }
     };
@@ -202,6 +205,14 @@ fn run_cli(args: Args) {
         Engine::Cpu => run_evolution!(StackIndividual, config, args),
         // GPU batch processing uses lightweight StackIndividual with GpuBatchEngine for GPU operations
         Engine::Gpu => run_evolution!(StackIndividual, config, args),
+        #[cfg(feature = "torch")]
+        Engine::Torch => {
+            #[cfg(feature = "torch")]
+            {
+                use crate::engines::TorchIndividual;
+                run_evolution!(TorchIndividual, config, args)
+            }
+        }
     };
 
     info!("Evolution finished.");

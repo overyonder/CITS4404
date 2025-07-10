@@ -472,6 +472,15 @@ fn start_training(app: &mut App) {
                     tx.clone()
                 )
             }
+            #[cfg(feature = "torch")]
+            Engine::Torch => {
+                // Use TorchIndividual for PyTorch GPU processing
+                run_evolution_for_engine!(
+                    crate::engines::TorchIndividual,
+                    training_config,
+                    tx.clone()
+                )
+            }
         }
         
         // After evolution is done, send the finished signal.
@@ -501,7 +510,18 @@ fn change_config_value(app: &mut App, increase: bool) {
             "Engine" => {
                 config.engine = match config.engine {
                     Engine::Cpu => Engine::Gpu,
-                    Engine::Gpu => Engine::Cpu,
+                    Engine::Gpu => {
+                        #[cfg(feature = "torch")]
+                        {
+                            Engine::Torch
+                        }
+                        #[cfg(not(feature = "torch"))]
+                        {
+                            Engine::Cpu
+                        }
+                    },
+                    #[cfg(feature = "torch")]
+                    Engine::Torch => Engine::Cpu,
                 };
             }
             "Generations" => {

@@ -37,13 +37,22 @@ pub enum Engine {
     /// - **Best for**: Large populations (500+), when raw throughput matters most
     /// - **Implementation**: Batched evaluation with GPU memory management
     Gpu,
+    /// **PyTorch Engine:** Uses PyTorch tensors with CUDA acceleration.
+    /// - **Advantages**: Mature ML framework optimizations, advanced GPU utilization, ecosystem integration
+    /// - **Best for**: Research, development, when PyTorch ecosystem is beneficial
+    /// - **Implementation**: PyTorch tensors with automatic CUDA memory management
+    /// - **Requirements**: libtorch installation, CUDA-compatible GPU (optional)
+    #[cfg(feature = "torch")]
+    Torch,
 }
 
 impl fmt::Display for Engine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Engine::Cpu => write!(f, "CPU"),
-            Engine::Gpu => write!(f, "GPU"),
+            Engine::Gpu => write!(f, "GPU (WGSL)"),
+            #[cfg(feature = "torch")]
+            Engine::Torch => write!(f, "GPU (Torch-CUDA)"),
         }
     }
 }
