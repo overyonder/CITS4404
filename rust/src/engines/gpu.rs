@@ -1,10 +1,6 @@
 //! An experimental neural network engine that leverages the GPU for massively parallel
 //! tournament evaluation using WGSL shaders.
 //!
-//! # WARNING: Experimental
-//! This module is highly experimental and may not be fully functional or stable.
-//! It requires a compatible GPU and a modern graphics driver (Vulkan, DX12, Metal).
-//!
 //! # Teaching Note: GPU Computing in Machine Learning
 //! GPUs excel at parallel computation, making them ideal for neural network operations.
 //! While this implementation focuses on forward propagation, modern ML frameworks
@@ -85,6 +81,7 @@ struct BatchConfig {
     activation_type: u32,     // Activation function (0-5)
     random_seed: u32,         // Random seed for reproducibility
     fitness_function: u32,    // Fitness function type (0-2)
+    workgroup_offset: u32,    // Offset for chunked dispatch
 }
 
 /// Result of batch tournament evaluation
@@ -280,26 +277,34 @@ impl GpuContext {
 
     /// Gets optimal workgroup size for batch processing based on GPU capabilities
     ///
-    /// # Teaching Note: GPU Performance Optimization
-    /// Different GPUs have different optimal workgroup sizes. This function provides
-    /// a reasonable default while allowing for future optimization based on specific
-    /// GPU architectures. Modern GPUs typically perform best with workgroup sizes
-    /// that are multiples of the warp/wavefront size (32 or 64).
-    fn get_optimal_workgroup_size(&self, population_size: u32) -> u32 {
-        // Start with a reasonable default
-        let base_workgroup_size = 64u32;
+    /// # Teaching Note: GTX 1070 Optimization
+    /// The GTX 1070 has 1920 CUDA cores arranged in 15 SMs (Streaming Multiprocessors).
+    /// Optimal workgroup sizes should be multiples of warp size (32) and fully utilize
+    /// the GPU's compute capability. For populations of 4K-8K, we can achieve excellent
+    /// GPU utilization with larger workgroups.
+    fn get_optimal_workgroup_size(&self, num_tournaments: u32) -> u32 {
+        // Optimal workgroup sizes for different GPU architectures
+        // GTX 1070: 15 SMs × 128 cores/SM = 1920 cores
+        // Optimal: 64-256 threads per workgroup (2-8 warps)
+        let optimal_sizes = [256u32, 128u32, 64u32, 32u32];
         
-        // Calculate number of workgroups needed
-        let num_workgroups = (population_size + base_workgroup_size - 1) / base_workgroup_size;
-        
-        // Ensure we don't exceed GPU limits
-        let max_workgroups = self.max_compute_units;
-        if num_workgroups > max_workgroups {
-            // Adjust workgroup size to fit within limits
-            (population_size + max_workgroups - 1) / max_workgroups
-        } else {
-            base_workgroup_size
+        // Find the largest workgroup size that provides good GPU utilization
+        for &workgroup_size in optimal_sizes.iter() {
+            let num_workgroups = (num_tournaments + workgroup_size - 1) / workgroup_size;
+            
+            // Target 8-64 workgroups for optimal GPU utilization
+            // (enough to keep all SMs busy without excessive overhead)
+            if num_workgroups >= 8 && num_workgroups <= 128 {
+                debug!("Selected workgroup size: {} ({} workgroups for {} tournaments)", 
+                       workgroup_size, num_workgroups, num_tournaments);
+                return workgroup_size;
+            }
         }
+        
+        // Fallback for small populations
+        let fallback_size = 32u32;
+        debug!("Using fallback workgroup size: {} for {} tournaments", fallback_size, num_tournaments);
+        fallback_size
     }
 }
 
@@ -677,69 +682,73 @@ impl GpuBatchEngine {
         })
     }
 
-    /// Prepares GPU buffers for a specific population size
+    /// Prepares GPU buffers for batch processing.
     ///
-    /// # Teaching Note: Dynamic Buffer Management
-    /// This method demonstrates efficient GPU memory management:
-    /// - Buffers are only created when needed
-    /// - Existing buffers are reused if they're large enough
-    /// - Memory allocation is minimized during training
+    /// This function is now idempotent: it only re-allocates if the required size
+    /// exceeds the current buffer capacity. This prevents resource leaks that previously caused driver crashes.
     fn prepare_buffers(&mut self, population_size: usize) -> Result<(), Box<dyn std::error::Error>> {
-        if population_size > self.max_population_size {
-            return Err(format!("Population size {} exceeds maximum {}", 
-                             population_size, self.max_population_size).into());
-        }
+        let mut reallocate_bind_group = false;
 
-        let device = &self.context.device;
-        
-        // Calculate buffer sizes
+        // --- Re-allocate population weights buffer ONLY if needed ---
         let weights_buffer_size = (population_size * TOTAL_WEIGHTS * std::mem::size_of::<f32>()) as u64;
-        let assignments_buffer_size = (population_size * std::mem::size_of::<u32>()) as u64;
-        let results_buffer_size = (population_size * std::mem::size_of::<TournamentResult>()) as u64;
-
-        // Create or reuse buffers
-        if self.population_weights_buffer.is_none() {
-            self.population_weights_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+        if self.population_weights_buffer.as_ref().map_or(true, |b| b.size() < weights_buffer_size) {
+            info!("Re-allocating population weights buffer to size: {} bytes", weights_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Population Weights Buffer"),
                 size: weights_buffer_size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            }));
+            });
+            self.population_weights_buffer = Some(buffer);
+            reallocate_bind_group = true;
         }
-
-        if self.tournament_assignments_buffer.is_none() {
-            self.tournament_assignments_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+        
+        // --- Re-allocate tournament assignments buffer ONLY if needed ---
+        let assignments_buffer_size = (population_size * std::mem::size_of::<u32>()) as u64;
+        if self.tournament_assignments_buffer.as_ref().map_or(true, |b| b.size() < assignments_buffer_size) {
+            info!("Re-allocating tournament assignments buffer to size: {} bytes", assignments_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Tournament Assignments Buffer"),
                 size: assignments_buffer_size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            }));
+            });
+            self.tournament_assignments_buffer = Some(buffer);
+            reallocate_bind_group = true;
         }
 
-        if self.tournament_results_buffer.is_none() {
-            self.tournament_results_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+        // --- Re-allocate tournament results buffer ONLY if needed ---
+        let results_buffer_size = (population_size * std::mem::size_of::<TournamentResult>()) as u64;
+        if self.tournament_results_buffer.as_ref().map_or(true, |b| b.size() < results_buffer_size) {
+            info!("Re-allocating tournament results buffer to size: {} bytes", results_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Tournament Results Buffer"),
                 size: results_buffer_size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
-            }));
+            });
+            self.tournament_results_buffer = Some(buffer);
+            reallocate_bind_group = true;
         }
 
-        if self.staging_buffer.is_none() {
-            self.staging_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Results Staging Buffer"),
+        // --- Re-allocate staging buffer ONLY if needed ---
+        if self.staging_buffer.as_ref().map_or(true, |b| b.size() < results_buffer_size) {
+            info!("Re-allocating staging buffer to size: {} bytes", results_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Staging Buffer"),
                 size: results_buffer_size,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            }));
+            });
+            self.staging_buffer = Some(buffer);
         }
 
-        // Create bind group
-        if self.bind_group.is_none() {
-            let bind_group_layout = self.context.batch_pipeline.get_bind_group_layout(0);
-            self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Batch Bind Group"),
-                layout: &bind_group_layout,
+        // --- Re-create bind group if any of the core buffers were re-allocated ---
+        if self.bind_group.is_none() || reallocate_bind_group {
+            info!("Re-creating GPU bind group.");
+            let bind_group = self.context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Batch Processing Bind Group"),
+                layout: &self.context.batch_pipeline.get_bind_group_layout(0),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -758,9 +767,10 @@ impl GpuBatchEngine {
                         resource: self.batch_config_buffer.as_entire_binding(),
                     },
                 ],
-            }));
+            });
+            self.bind_group = Some(bind_group);
         }
-
+        
         Ok(())
     }
 
@@ -830,55 +840,66 @@ impl GpuBatchEngine {
             bytemuck::cast_slice(&tournament_assignments),
         );
 
-        // Configure batch processing
-        let batch_config = BatchConfig {
-            population_size: population_size as u32,
-            tournament_size: tournament_size as u32,
-            num_tournaments: num_tournaments as u32,
-            activation_type: match config.activation {
-                Activation::ClampedLinear => 0,
-                Activation::Tanh => 1,
-                Activation::Relu => 2,
-                Activation::Atan => 3,
-                Activation::Linear => 4,
-                Activation::Sigmoid => 5,
-            },
-            random_seed: rng.random(),
-            fitness_function: match config.fitness_func {
-                crate::config::FitnessFunc::CppEquivalent => 0,
-                crate::config::FitnessFunc::ReturnFocused => 1,
-                crate::config::FitnessFunc::VictoryOptimized => 2,
-            },
-        };
-
-        self.context.queue.write_buffer(
-            &self.batch_config_buffer,
-            0,
-            bytemuck::bytes_of(&batch_config),
-        );
-
-        // Execute batch processing on GPU
+        // Execute batch processing on GPU in chunks to avoid TDR
         let optimal_workgroup_size = self.context.get_optimal_workgroup_size(num_tournaments as u32);
-        let num_workgroups = (num_tournaments as u32 + optimal_workgroup_size - 1) / optimal_workgroup_size;
+        let total_workgroups = (num_tournaments as u32 + optimal_workgroup_size - 1) / optimal_workgroup_size;
+        
+        const MAX_WORKGROUPS_PER_DISPATCH: u32 = 256; // Keep each dispatch reasonably small
 
-        debug!("Dispatching {} workgroups of size {}", num_workgroups, optimal_workgroup_size);
+        for workgroup_offset in (0..total_workgroups).step_by(MAX_WORKGROUPS_PER_DISPATCH as usize) {
+            let workgroups_in_chunk = (total_workgroups - workgroup_offset).min(MAX_WORKGROUPS_PER_DISPATCH);
 
-        let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Batch Tournament Encoder"),
-        });
+            // Configure batch processing for the current chunk
+            let batch_config = BatchConfig {
+                population_size: population_size as u32,
+                tournament_size: tournament_size as u32,
+                num_tournaments: num_tournaments as u32,
+                activation_type: match config.activation {
+                    Activation::ClampedLinear => 0,
+                    Activation::Tanh => 1,
+                    Activation::Relu => 2,
+                    Activation::Atan => 3,
+                    Activation::Linear => 4,
+                    Activation::Sigmoid => 5,
+                },
+                random_seed: rng.random(),
+                fitness_function: match config.fitness_func {
+                    crate::config::FitnessFunc::CppEquivalent => 0,
+                    crate::config::FitnessFunc::ReturnFocused => 1,
+                    crate::config::FitnessFunc::VictoryOptimized => 2,
+                },
+                workgroup_offset,
+            };
 
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Batch Tournament Pass"),
-                timestamp_writes: None,
+            self.context.queue.write_buffer(
+                &self.batch_config_buffer,
+                0,
+                bytemuck::bytes_of(&batch_config),
+            );
+
+            let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(&format!("Batch Chunk Encoder (Offset: {})", workgroup_offset)),
             });
-            cpass.set_pipeline(&self.context.batch_pipeline);
-            cpass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
-            cpass.dispatch_workgroups(num_workgroups, 1, 1);
+
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some(&format!("Batch Chunk Pass (Offset: {})", workgroup_offset)),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&self.context.batch_pipeline);
+                cpass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
+                cpass.dispatch_workgroups(workgroups_in_chunk, 1, 1);
+            }
+            self.context.queue.submit(Some(encoder.finish()));
         }
 
+        // After all chunks are dispatched, create a final command to copy results
+        let mut final_encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Final Result Copy Encoder"),
+        });
+
         // Copy results to staging buffer
-        encoder.copy_buffer_to_buffer(
+        final_encoder.copy_buffer_to_buffer(
             self.tournament_results_buffer.as_ref().unwrap(),
             0,
             self.staging_buffer.as_ref().unwrap(),
@@ -886,7 +907,7 @@ impl GpuBatchEngine {
             (population_size * std::mem::size_of::<TournamentResult>()) as u64,
         );
 
-        self.context.queue.submit(Some(encoder.finish()));
+        self.context.queue.submit(Some(final_encoder.finish()));
 
         // Read results back to CPU
         let mut fitness_values = vec![0.0f32; population_size];
@@ -932,8 +953,8 @@ fn read_buffer_sync(
         let _ = sender.send(result);
     });
 
-    // Poll the device until the result is ready.
-    // This is crucial for non-event-loop applications.
+    // Optimized polling with minimal CPU overhead
+    let mut poll_count = 0;
     loop {
         match receiver.try_recv() {
             Ok(Ok(())) => {
@@ -949,10 +970,15 @@ fn read_buffer_sync(
                 return Err(format!("Failed to read data from GPU buffer: {:?}", e).into());
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
-                // Not ready yet, so we need to poll the device to drive the async operations.
-                // Maintain::Wait will block until there's an event, which is what we want
-                // in this synchronous helper.
-                let _ = device.poll(wgpu::PollType::Wait);
+                // Adaptive polling strategy to reduce CPU overhead
+                poll_count += 1;
+                if poll_count < 2 {
+                    // Fast polling for the first few iterations
+                    let _ = device.poll(wgpu::MaintainBase::Poll);
+                } else {
+                    // Switch to blocking wait to avoid CPU spinning
+                    let _ = device.poll(wgpu::MaintainBase::Wait);
+                }
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 error!("Failed to receive GPU operation result: channel disconnected");

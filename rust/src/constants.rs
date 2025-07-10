@@ -89,6 +89,14 @@ pub const TICK_RATE: u16 = 60;
 /// in exactly 1 second, providing intuitive scaling.
 pub const PADDLE_MAX_VEL: f32 = HEIGHT as f32 / TICK_RATE as f32; // 5.0 px/tick
 
+/// The maximum number of steps (frames) a single game can last.
+/// 
+/// # Teaching Note: Infinite Loop Prevention
+/// This acts as a safeguard against games that might never end due to
+/// two perfectly matched, purely defensive AIs. A limit of 1800 steps (30 seconds
+/// at 60fps) ensures every game terminates, allowing fitness evaluation to proceed.
+pub const MAX_STEPS: u32 = 1800;
+
 /// The initial x-velocity of the ball in pixels per tick.
 ///
 /// # Teaching Note: Ball Speed Tuning

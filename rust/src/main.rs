@@ -37,23 +37,23 @@ struct Args {
     concurrent: bool,
 
     /// The number of generations to run the evolutionary algorithm.
-    #[arg(short, long, default_value_t = 100)]
+    #[arg(short, long, default_value_t = Config::default().generations)]
     generations: u32,
 
     /// The number of individuals (genomes) in the population.
-    #[arg(long, default_value_t = 128)]
+    #[arg(long, default_value_t = Config::default().population_size)]
     population_size: usize,
 
     /// The number of the fittest individuals to carry over to the next generation unchanged.
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = Config::default().elite_count)]
     elite_count: usize,
 
     /// The probability (from 0.0 to 1.0) that a gene (weight) will be mutated.
-    #[arg(long, default_value_t = 0.05)]
+    #[arg(long, default_value_t = Config::default().mutation_rate)]
     mutation_rate: f32,
 
     /// The maximum magnitude of a mutation.
-    #[arg(long, default_value_t = 0.1)]
+    #[arg(long, default_value_t = Config::default().mutation_strength)]
     mutation_strength: f32,
 
     /// The activation function to use in the neural network's hidden layers.
@@ -78,8 +78,18 @@ struct Args {
     load_from: Option<String>,
 }
 
+extern "C" {
+    #[link_name = "?warp_size@cuda@at@@YAHXZ"]
+    fn warp_size() -> i32;
+}
+
 /// Application entry point.
 fn main() -> io::Result<()> {
+
+    unsafe {
+        warp_size();
+    }
+
     // === Enhanced Logging Configuration ===
     // Configure tracing subscriber with conditional console output
     // In TUI mode, we disable console logging to avoid disrupting the interface

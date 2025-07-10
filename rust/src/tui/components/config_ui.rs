@@ -156,8 +156,11 @@ fn get_config_items(config: &Config) -> Vec<(&'static str, String, bool)> {
          true),
         ("Track Diversity", config.track_diversity.to_string(), true),
         ("Random Ball Direction", config.random_ball_direction.to_string(), true),
-        ("Concurrent Training", config.concurrent.to_string(), true),
     ]);
+
+    if matches!(config.engine, Engine::Cpu) {
+        items.push(("Concurrent Training", config.concurrent.to_string(), true));
+    }
 
     items
 }

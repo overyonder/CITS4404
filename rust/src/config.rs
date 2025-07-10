@@ -262,35 +262,38 @@ impl Default for Config {
             date_trained: None,
 
             // Core algorithm
+            #[cfg(feature = "torch")]
+            engine: Engine::Torch,
+            #[cfg(not(feature = "torch"))]
             engine: Engine::default(),
-            activation: Activation::ClampedLinear, // C++ equivalent
-            generations: 5000,
-            concurrent: false,
+            activation: Activation::ClampedLinear,
+            generations: 200,
+            concurrent: true,
 
             // Population parameters
-            population_size: 128,     // C++ default
-            elite_count: 11,          // C++ default: ~8.6% of population
+            population_size: 2048,
+            elite_count: 32,
 
             // Selection parameters
             selection_strategy: SelectionStrategy::Tournament,
-            tournament_size: 3,       // Moderate selection pressure
-            truncation_rate: 0.3,     // Top 30% can reproduce
+            tournament_size: 3,
+            truncation_rate: 0.3,
 
             // Reproduction parameters
             reproduction_strategy: ReproductionStrategy::default(),
-            crossover_rate: 0.8,      // Standard value in EA literature
+            crossover_rate: 0.8,
 
             // Mutation parameters
-            mutation_strategy: MutationStrategy::default(),
-            mutation_rate: 0.05,      // C++ default: 5%
-            mutation_strength: 0.1,   // C++ default: ±10%
+            mutation_strategy: MutationStrategy::CppEquivalent,
+            mutation_rate: 0.05,
+            mutation_strength: 0.1,
             adaptive_mutation: false,
-            min_mutation_rate: 0.01,  // 1% minimum
-            max_mutation_rate: 0.2,   // 20% maximum
+            min_mutation_rate: 0.01,
+            max_mutation_rate: 0.2,
 
             // Convergence criteria
-            early_stopping_patience: None, // No early stopping by default
-            fitness_threshold: Some(0.01),     // 1% improvement threshold (updated range)
+            early_stopping_patience: None,
+            fitness_threshold: None,
             track_diversity: false,
 
             // Fitness function
@@ -298,9 +301,9 @@ impl Default for Config {
             normalize_fitness: false,
 
             // Simulation
-            random_ball_direction: false, // C++ default: fixed direction
-            random_seed: None,           // Random seed each run
-            simulation_speed: 1.0,       // Normal speed (1x multiplier)
+            random_ball_direction: true,
+            random_seed: None,
+            simulation_speed: 1.0,
         }
     }
 }
