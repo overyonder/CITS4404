@@ -139,12 +139,54 @@ impl<I: Individual> Population<I> {
             None
         };
         
+        // Load champion weights if specified for seeding
+        let champion_weights: Option<Vec<f32>> = if let Some(ref champion_path) = config.champion_seed_path {
+            match crate::tui::model_loader::load_model_from_file(std::path::Path::new(champion_path)) {
+                Ok((weights, _config)) => {
+                    info!("Successfully loaded champion from: {}", champion_path);
+                    Some(weights)
+                }
+                Err(e) => {
+                    warn!("Failed to load champion from {}: {}. Using random initialization.", champion_path, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         debug!("Creating {} individuals...", pop_size);
         let individuals: Vec<I> = (0..pop_size)
             .enumerate()
             .map(|(i, _)| {
                 if i % 10 == 0 { debug!("Created {} individuals", i); }
-                I::default()
+                
+                // Create individual
+                let mut individual = I::default();
+                
+                // Seed with champion if available and within seeding range
+                if let Some(ref champion_weights) = champion_weights {
+                    // Seed first 25% of population with champion (with some mutation for diversity)
+                    let seed_count = pop_size / 4;
+                    if i < seed_count {
+                        // Copy champion weights
+                        let weights_slice = individual.weights_as_mut_slice();
+                        weights_slice.copy_from_slice(champion_weights);
+                        
+                        // Add small mutations to seeded individuals (except the first one, which is pure champion)
+                        if i > 0 {
+                            let mut rng = rand::rng();
+                            for weight in weights_slice.iter_mut() {
+                                // Add small random variation (±5% of weight value)
+                                let variation = rng.random_range(-0.05..=0.05) * weight.abs().max(0.1);
+                                *weight += variation;
+                            }
+                        }
+                        debug!("Individual {} seeded with champion (variation: {})", i, i > 0);
+                    }
+                }
+                
+                individual
             })
             .collect();
         debug!("All {} individuals created", pop_size);
@@ -772,8 +814,13 @@ impl<I: Individual> Population<I> {
             // Calculate training performance metrics
             let total_matches_this_gen = match self.config.engine {
                 crate::config::Engine::Cpu => (self.config.population_size * (self.config.population_size - 1)) as u64,
-                // For GPU engines, each individual is evaluated once in a batch, equivalent to 1 match.
-                _ => self.config.population_size as u64,
+                // GPU and Torch engines now do full round-robin like CPU, so same match count
+                crate::config::Engine::Gpu => (self.config.population_size * (self.config.population_size - 1)) as u64,
+                #[cfg(feature = "torch")]
+                crate::config::Engine::Torch => {
+                    // PyTorch engine also does full round-robin, so same match count
+                    (self.config.population_size * (self.config.population_size - 1)) as u64
+                }
             };
 
             total_matches_simulated += total_matches_this_gen;

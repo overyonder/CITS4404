@@ -76,19 +76,15 @@ struct Args {
     /// When using this, other training arguments are ignored.
     #[arg(long)]
     load_from: Option<String>,
-}
 
-extern "C" {
-    #[link_name = "?warp_size@cuda@at@@YAHXZ"]
-    fn warp_size() -> i32;
+    /// Path to a saved champion model to seed the population with.
+    /// Seeds 25% of the population with the champion's weights for transfer learning.
+    #[arg(long)]
+    champion_seed: Option<String>,
 }
 
 /// Application entry point.
 fn main() -> io::Result<()> {
-
-    unsafe {
-        warp_size();
-    }
 
     // === Enhanced Logging Configuration ===
     // Configure tracing subscriber with conditional console output
@@ -158,6 +154,7 @@ fn run_cli(args: Args) {
         mutation_strength: args.mutation_strength,
         mutation_strategy: args.mutation_strategy,
         fitness_func: args.fitness_func,
+        champion_seed_path: args.champion_seed,
         ..Default::default()
     };
 

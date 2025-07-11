@@ -20,7 +20,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table},
     Frame,
 };
-use std::{sync::mpsc, thread};
+use std::{fs, path::Path, sync::mpsc, thread};
 
 /// Parameter metadata for enhanced UI display and validation.
 struct ParameterInfo {
@@ -47,7 +47,7 @@ const PARAMETER_INFO: &[ParameterInfo] = &[
     ParameterInfo {
         name: "Population Size",
         description: "Number of individuals in each generation",
-        valid_range: "10-8000",
+        valid_range: "10-800000",
         educational_note: "Larger populations explore more solutions but require more computation. 50-200 works well for most problems.",
     },
     ParameterInfo {
@@ -122,6 +122,12 @@ const PARAMETER_INFO: &[ParameterInfo] = &[
         valid_range: "true, false", 
         educational_note: "Parallel processing speeds up training on multi-core systems but adds complexity and memory usage.",
     },
+    ParameterInfo {
+        name: "Champion Seed",
+        description: "Previous champion model to seed population with",
+        valid_range: "None, or any saved model",
+        educational_note: "Seeds 25% of population with a previous champion's weights. Enables transfer learning and faster convergence.",
+    },
 ];
 
 /// Creates a vector of configuration items for display with validation.
@@ -162,7 +168,41 @@ fn get_config_items(config: &Config) -> Vec<(&'static str, String, bool)> {
         items.push(("Concurrent Training", config.concurrent.to_string(), true));
     }
 
+    // Champion seeding option
+    items.push(("Champion Seed", 
+        config.champion_seed_path.as_ref()
+            .map(|path| std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(path))
+            .unwrap_or("None")
+            .to_string(), 
+        true));
+
     items
+}
+
+/// Gets a list of available champion models from the models directory.
+fn get_available_champions() -> Vec<String> {
+    let models_path = Path::new("models");
+    let mut champions = vec!["None".to_string()];
+    
+    if let Ok(entries) = fs::read_dir(models_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(extension) = path.extension() {
+                    if extension == "json" || extension == "log" {
+                        if path.file_name().and_then(|n| n.to_str()).is_some() {
+                            champions.push(path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    champions
 }
 
 /// Validates the entire configuration and returns issues if any.
@@ -179,7 +219,7 @@ fn validate_config(config: &Config) -> Vec<String> {
     if config.population_size < 10 {
         issues.push("Population size too small (minimum 10)".to_string());
     }
-    if config.population_size > 8000 {
+    if config.population_size > 800000 {
         issues.push("Population size very large (will be slow)".to_string());
     }
     
@@ -193,6 +233,13 @@ fn validate_config(config: &Config) -> Vec<String> {
         }
         if config.mutation_strength > 1.0 {
             issues.push("Mutation strength high (may cause instability)".to_string());
+        }
+    }
+    
+    // Validate champion seed path if specified
+    if let Some(ref champion_path) = config.champion_seed_path {
+        if !Path::new(champion_path).exists() {
+            issues.push(format!("Champion seed file not found: {}", champion_path));
         }
     }
     
@@ -538,7 +585,7 @@ fn change_config_value(app: &mut App, increase: bool) {
             "Population Size" => {
                 let step = if config.population_size < 50 { 5 } else { 10 };
                 if increase {
-                    config.population_size = (config.population_size + step).min(8000);
+                    config.population_size = (config.population_size + step).min(800000);
                 } else {
                     config.population_size = config.population_size.saturating_sub(step).max(10);
                 }
@@ -639,6 +686,32 @@ fn change_config_value(app: &mut App, increase: bool) {
             }
             "Concurrent Training" => {
                 config.concurrent = !config.concurrent;
+            }
+            "Champion Seed" => {
+                let available_champions = get_available_champions();
+                if available_champions.len() > 1 {
+                    let current_index = if let Some(ref current_path) = config.champion_seed_path {
+                        available_champions.iter().position(|path| path == current_path).unwrap_or(0)
+                    } else {
+                        0 // "None" is at index 0
+                    };
+                    
+                    let new_index = if increase {
+                        (current_index + 1) % available_champions.len()
+                    } else {
+                        if current_index == 0 {
+                            available_champions.len() - 1
+                        } else {
+                            current_index - 1
+                        }
+                    };
+                    
+                    config.champion_seed_path = if new_index == 0 {
+                        None // "None" selected
+                    } else {
+                        Some(available_champions[new_index].clone())
+                    };
+                }
             }
             _ => {}
         }

@@ -316,6 +316,7 @@ fn create_cpp_compatible_config(generation_count: u32, _metadata: &CppLogMetadat
         concurrent: false,            // C++ version was single-threaded
         random_seed: None,           // C++ used system time as seed
         simulation_speed: 1.0,       // Normal speed for C++ compatibility
+        champion_seed_path: None,    // C++ doesn't use champion seeding
         
         // Metadata
         date_trained: None, // Unknown from C++ logs

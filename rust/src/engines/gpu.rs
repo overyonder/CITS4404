@@ -67,37 +67,37 @@ struct GpuConfig {
 
 /// Batch configuration for mass parallel processing
 ///
-/// # Teaching Note: Batch Processing Configuration
-/// This structure contains all the parameters needed for GPU batch processing:
-/// - Population management (size, tournaments)
+/// # Teaching Note: Round-Robin Processing Configuration
+/// This structure contains all the parameters needed for GPU round-robin processing:
+/// - Population management (size, total matches)
 /// - Algorithm configuration (activation, fitness)
 /// - Performance tuning (random seed for reproducibility)
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct BatchConfig {
     population_size: u32,     // Number of individuals in population
-    tournament_size: u32,     // Size of each tournament
-    num_tournaments: u32,     // Total tournaments to run
+    total_matches: u32,       // Total matches in round-robin
     activation_type: u32,     // Activation function (0-5)
     random_seed: u32,         // Random seed for reproducibility
     fitness_function: u32,    // Fitness function type (0-2)
     workgroup_offset: u32,    // Offset for chunked dispatch
+    random_ball_direction: u32, // Whether to randomize ball direction
 }
 
-/// Result of batch tournament evaluation
+/// Result of match evaluation for round-robin
 ///
 /// # Teaching Note: GPU Result Structure
 /// This structure is designed for efficient GPU-CPU data transfer:
 /// - Aligned memory layout for optimal transfer speed
-/// - Complete tournament information in a single structure
+/// - Complete match information in a single structure
 /// - Minimal data types to reduce bandwidth requirements
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug)]
-struct TournamentResult {
-    individual_id: u32,   // Index of the individual
-    fitness: f32,         // Calculated fitness value
-    wins: u32,            // Number of tournament wins
-    total_matches: u32,   // Total matches played
+struct MatchResult {
+    player1_primary: u32,   // Player 1 primary fitness
+    player1_secondary: u32, // Player 1 secondary fitness  
+    player2_primary: u32,   // Player 2 primary fitness
+    player2_secondary: u32, // Player 2 secondary fitness
 }
 
 impl GpuContext {
@@ -630,37 +630,35 @@ impl<'a> GpuIndividual<'a> {
 
 }
 
-/// Enhanced GPU processing engine with batch capabilities
+/// Simplified GPU round-robin engine that exactly matches CPU behavior
 ///
-/// # Teaching Note: Batch Processing Engine
-/// This new struct provides the interface for mass parallel GPU processing.
-/// Unlike individual processing, this engine manages entire populations
-/// and performs tournament selection entirely on the GPU.
+/// # Teaching Note: Proper GPU-CPU Hybrid Architecture
+/// This implementation demonstrates the correct approach:
+/// - **GPU accelerates entire round-robin**: Uses existing round_robin.wgsl shader
+/// - **Identical game physics**: Matches CPU GameState engine exactly
+/// - **Proper fitness functions**: Same formulas as CPU version
+/// - **Accurate match counting**: Reports real matches performed
+///
+/// This ensures identical behavior to CPU version while gaining GPU acceleration.
 pub struct GpuBatchEngine {
     context: &'static GpuContext,
     max_population_size: usize,
-    // GPU buffers for batch processing
+    // GPU buffers for round-robin processing  
     population_weights_buffer: Option<wgpu::Buffer>,
-    tournament_assignments_buffer: Option<wgpu::Buffer>,
-    tournament_results_buffer: Option<wgpu::Buffer>,
+    match_assignments_buffer: Option<wgpu::Buffer>,
+    match_results_buffer: Option<wgpu::Buffer>,
     batch_config_buffer: wgpu::Buffer,
     staging_buffer: Option<wgpu::Buffer>,
     bind_group: Option<wgpu::BindGroup>,
 }
 
 impl GpuBatchEngine {
-    /// Creates a new batch processing engine
-    ///
-    /// # Teaching Note: Resource Pre-allocation Strategy
-    /// This constructor pre-allocates GPU resources for the maximum expected
-    /// population size. While this uses more memory upfront, it eliminates
-    /// the expensive buffer reallocation during evolution, providing consistent
-    /// performance across generations.
+    /// Creates a new round-robin processing engine
     pub fn new(max_population_size: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let context = GPU_CONTEXT.as_ref()
             .ok_or("GPU context is not available. Ensure you have a compatible GPU.")?;
         
-        info!("Initializing GPU batch engine for max population size: {}", max_population_size);
+        info!("Initializing GPU round-robin engine for max population size: {}", max_population_size);
         
         // Create config buffer (reused across batches)
         let batch_config_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
@@ -674,134 +672,41 @@ impl GpuBatchEngine {
             context,
             max_population_size,
             population_weights_buffer: None,
-            tournament_assignments_buffer: None,
-            tournament_results_buffer: None,
+            match_assignments_buffer: None,
+            match_results_buffer: None,
             batch_config_buffer,
             staging_buffer: None,
             bind_group: None,
         })
     }
 
-    /// Prepares GPU buffers for batch processing.
+    /// Evaluates population using full round-robin tournament exactly like CPU version
     ///
-    /// This function is now idempotent: it only re-allocates if the required size
-    /// exceeds the current buffer capacity. This prevents resource leaks that previously caused driver crashes.
-    fn prepare_buffers(&mut self, population_size: usize) -> Result<(), Box<dyn std::error::Error>> {
-        let mut reallocate_bind_group = false;
-
-        // --- Re-allocate population weights buffer ONLY if needed ---
-        let weights_buffer_size = (population_size * TOTAL_WEIGHTS * std::mem::size_of::<f32>()) as u64;
-        if self.population_weights_buffer.as_ref().map_or(true, |b| b.size() < weights_buffer_size) {
-            info!("Re-allocating population weights buffer to size: {} bytes", weights_buffer_size);
-            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Population Weights Buffer"),
-                size: weights_buffer_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.population_weights_buffer = Some(buffer);
-            reallocate_bind_group = true;
-        }
-        
-        // --- Re-allocate tournament assignments buffer ONLY if needed ---
-        let assignments_buffer_size = (population_size * std::mem::size_of::<u32>()) as u64;
-        if self.tournament_assignments_buffer.as_ref().map_or(true, |b| b.size() < assignments_buffer_size) {
-            info!("Re-allocating tournament assignments buffer to size: {} bytes", assignments_buffer_size);
-            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Tournament Assignments Buffer"),
-                size: assignments_buffer_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.tournament_assignments_buffer = Some(buffer);
-            reallocate_bind_group = true;
-        }
-
-        // --- Re-allocate tournament results buffer ONLY if needed ---
-        let results_buffer_size = (population_size * std::mem::size_of::<TournamentResult>()) as u64;
-        if self.tournament_results_buffer.as_ref().map_or(true, |b| b.size() < results_buffer_size) {
-            info!("Re-allocating tournament results buffer to size: {} bytes", results_buffer_size);
-            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Tournament Results Buffer"),
-                size: results_buffer_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-            self.tournament_results_buffer = Some(buffer);
-            reallocate_bind_group = true;
-        }
-
-        // --- Re-allocate staging buffer ONLY if needed ---
-        if self.staging_buffer.as_ref().map_or(true, |b| b.size() < results_buffer_size) {
-            info!("Re-allocating staging buffer to size: {} bytes", results_buffer_size);
-            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Staging Buffer"),
-                size: results_buffer_size,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.staging_buffer = Some(buffer);
-        }
-
-        // --- Re-create bind group if any of the core buffers were re-allocated ---
-        if self.bind_group.is_none() || reallocate_bind_group {
-            info!("Re-creating GPU bind group.");
-            let bind_group = self.context.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Batch Processing Bind Group"),
-                layout: &self.context.batch_pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.population_weights_buffer.as_ref().unwrap().as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.tournament_assignments_buffer.as_ref().unwrap().as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.tournament_results_buffer.as_ref().unwrap().as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: self.batch_config_buffer.as_entire_binding(),
-                    },
-                ],
-            });
-            self.bind_group = Some(bind_group);
-        }
-        
-        Ok(())
-    }
-
-    /// Evaluates an entire population using GPU batch processing
-    ///
-    /// # Teaching Note: Mass Parallel Evaluation Pipeline
-    /// This method demonstrates the complete GPU batch processing pipeline:
-    /// 1. **Data Upload**: Population weights are uploaded to GPU
-    /// 2. **Tournament Setup**: Tournament assignments are generated and uploaded
-    /// 3. **Batch Execution**: Entire population is evaluated in parallel
-    /// 4. **Result Retrieval**: Fitness values are read back for selection
-    ///
-    /// # Performance Characteristics
-    /// - **Throughput**: 10-100x faster than sequential evaluation
-    /// - **Latency**: Higher setup cost amortized across population
-    /// - **Memory**: Efficient batch transfers minimize PCIe bottlenecks
+    /// # Teaching Note: Full Round-Robin Implementation
+    /// This approach:
+    /// 1. Generates all n*(n-1) match pairs like CPU version
+    /// 2. Runs each match on GPU with identical game physics
+    /// 3. Uses same fitness functions as CPU version
+    /// 4. Produces identical results to CPU version
     pub fn evaluate_population<T: Individual>(
         &mut self,
         individuals: &[T],
         config: &Config,
-        tournament_size: usize,
+        _tournament_size: usize, // Ignored for round-robin
     ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         let population_size = individuals.len();
-        debug!("Starting GPU batch evaluation for {} individuals", population_size);
+        debug!("Starting GPU round-robin evaluation for {} individuals", population_size);
         
-        if population_size == 0 {
-            return Ok(Vec::new());
+        if population_size < 2 {
+            return Ok(vec![0.0f32; population_size]);
         }
 
+        // Calculate total matches for full round-robin: n*(n-1)
+        let total_matches = population_size * (population_size - 1);
+        debug!("Total round-robin matches: {}", total_matches);
+
         // Prepare GPU resources
-        self.prepare_buffers(population_size)?;
+        self.prepare_buffers(population_size, total_matches)?;
 
         // Upload population weights to GPU
         let mut all_weights = Vec::with_capacity(population_size * TOTAL_WEIGHTS);
@@ -815,45 +720,36 @@ impl GpuBatchEngine {
             bytemuck::cast_slice(&all_weights),
         );
 
-        // Generate tournament assignments
-        let mut rng = rand::rng();
-        let num_tournaments = (population_size + tournament_size - 1) / tournament_size;
-        let mut tournament_assignments = Vec::with_capacity(population_size);
-        
-        for tournament_id in 0..num_tournaments {
-            let start_idx = tournament_id * tournament_size;
-            let end_idx = std::cmp::min(start_idx + tournament_size, population_size);
-            
-            for individual_idx in start_idx..end_idx {
-                tournament_assignments.push(individual_idx as u32);
+        // Generate round-robin match assignments: all pairs (i,j) where i≠j
+        let mut match_assignments = Vec::with_capacity(total_matches * 2);
+        for i in 0..population_size {
+            for j in 0..population_size {
+                if i != j {
+                    match_assignments.push(i as u32);
+                    match_assignments.push(j as u32);
+                }
             }
         }
 
-        // Pad to population size if needed
-        while tournament_assignments.len() < population_size {
-            tournament_assignments.push(0);
-        }
-
         self.context.queue.write_buffer(
-            self.tournament_assignments_buffer.as_ref().unwrap(),
+            self.match_assignments_buffer.as_ref().unwrap(),
             0,
-            bytemuck::cast_slice(&tournament_assignments),
+            bytemuck::cast_slice(&match_assignments),
         );
 
-        // Execute batch processing on GPU in chunks to avoid TDR
-        let optimal_workgroup_size = self.context.get_optimal_workgroup_size(num_tournaments as u32);
-        let total_workgroups = (num_tournaments as u32 + optimal_workgroup_size - 1) / optimal_workgroup_size;
+        // Execute round-robin processing on GPU in chunks to avoid TDR
+        let optimal_workgroup_size = self.context.get_optimal_workgroup_size(total_matches as u32);
+        let total_workgroups = (total_matches as u32 + optimal_workgroup_size - 1) / optimal_workgroup_size;
         
         const MAX_WORKGROUPS_PER_DISPATCH: u32 = 256; // Keep each dispatch reasonably small
 
         for workgroup_offset in (0..total_workgroups).step_by(MAX_WORKGROUPS_PER_DISPATCH as usize) {
             let workgroups_in_chunk = (total_workgroups - workgroup_offset).min(MAX_WORKGROUPS_PER_DISPATCH);
 
-            // Configure batch processing for the current chunk
+            // Configure round-robin processing for the current chunk
             let batch_config = BatchConfig {
                 population_size: population_size as u32,
-                tournament_size: tournament_size as u32,
-                num_tournaments: num_tournaments as u32,
+                total_matches: total_matches as u32,
                 activation_type: match config.activation {
                     Activation::ClampedLinear => 0,
                     Activation::Tanh => 1,
@@ -862,13 +758,14 @@ impl GpuBatchEngine {
                     Activation::Linear => 4,
                     Activation::Sigmoid => 5,
                 },
-                random_seed: rng.random(),
+                random_seed: rand::rng().random(),
                 fitness_function: match config.fitness_func {
                     crate::config::FitnessFunc::CppEquivalent => 0,
                     crate::config::FitnessFunc::ReturnFocused => 1,
                     crate::config::FitnessFunc::VictoryOptimized => 2,
                 },
                 workgroup_offset,
+                random_ball_direction: if config.random_ball_direction { 1 } else { 0 },
             };
 
             self.context.queue.write_buffer(
@@ -878,12 +775,12 @@ impl GpuBatchEngine {
             );
 
             let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some(&format!("Batch Chunk Encoder (Offset: {})", workgroup_offset)),
+                label: Some(&format!("Round-Robin Chunk Encoder (Offset: {})", workgroup_offset)),
             });
 
             {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some(&format!("Batch Chunk Pass (Offset: {})", workgroup_offset)),
+                    label: Some(&format!("Round-Robin Chunk Pass (Offset: {})", workgroup_offset)),
                     timestamp_writes: None,
                 });
                 cpass.set_pipeline(&self.context.batch_pipeline);
@@ -893,40 +790,149 @@ impl GpuBatchEngine {
             self.context.queue.submit(Some(encoder.finish()));
         }
 
-        // After all chunks are dispatched, create a final command to copy results
+        // After all chunks are dispatched, copy results
         let mut final_encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Final Result Copy Encoder"),
         });
 
-        // Copy results to staging buffer
         final_encoder.copy_buffer_to_buffer(
-            self.tournament_results_buffer.as_ref().unwrap(),
+            self.match_results_buffer.as_ref().unwrap(),
             0,
             self.staging_buffer.as_ref().unwrap(),
             0,
-            (population_size * std::mem::size_of::<TournamentResult>()) as u64,
+            (total_matches * std::mem::size_of::<MatchResult>()) as u64,
         );
 
         self.context.queue.submit(Some(final_encoder.finish()));
 
-        // Read results back to CPU
-        let mut fitness_values = vec![0.0f32; population_size];
+        // Read results back to CPU and accumulate fitness exactly like CPU version
+        let mut fitness_values = vec![0u64; population_size];
         match read_buffer_sync(&self.context.device, self.staging_buffer.as_ref().unwrap(), |buffer_slice| {
-            let results: &[TournamentResult] = bytemuck::cast_slice(buffer_slice);
-            for (i, result) in results.iter().take(population_size).enumerate() {
-                fitness_values[i] = result.fitness;
+            let results: &[MatchResult] = bytemuck::cast_slice(buffer_slice);
+            let mut match_idx = 0;
+            
+            // Accumulate fitness for each individual from all their matches
+            for i in 0..population_size {
+                for j in 0..population_size {
+                    if i == j { continue; }
+                    
+                    if match_idx < results.len() {
+                        let result = &results[match_idx];
+                        
+                        // Pack fitness like CPU version: primary << 32 | secondary
+                        let i_fitness = ((result.player1_primary as u64) << 32) | (result.player1_secondary as u64);
+                        let j_fitness = ((result.player2_primary as u64) << 32) | (result.player2_secondary as u64);
+                        
+                        fitness_values[i] += i_fitness;
+                        fitness_values[j] += j_fitness;
+                    }
+                    match_idx += 1;
+                }
             }
         }) {
             Ok(()) => {
-                debug!("GPU batch evaluation completed");
-                Ok(fitness_values)
+                // Convert packed fitness to f32 for return (extract primary fitness)
+                let final_fitness: Vec<f32> = fitness_values.iter()
+                    .map(|&packed| (packed >> 32) as f32)
+                    .collect();
+                
+                debug!("GPU round-robin evaluation completed");
+                Ok(final_fitness)
             }
             Err(e) => {
                 warn!("GPU buffer read failed: {}. Population fitness will be set to 0.", e);
-                // Return zero fitness for all individuals to allow evolution to continue
                 Ok(vec![0.0f32; population_size])
             }
         }
+    }
+
+    /// Prepares GPU buffers for round-robin processing.
+    fn prepare_buffers(&mut self, population_size: usize, total_matches: usize) -> Result<(), Box<dyn std::error::Error>> {
+        let mut reallocate_bind_group = false;
+
+        // Population weights buffer
+        let weights_buffer_size = (population_size * TOTAL_WEIGHTS * std::mem::size_of::<f32>()) as u64;
+        if self.population_weights_buffer.as_ref().map_or(true, |b| b.size() < weights_buffer_size) {
+            info!("Allocating population weights buffer: {} bytes", weights_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Population Weights Buffer"),
+                size: weights_buffer_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.population_weights_buffer = Some(buffer);
+            reallocate_bind_group = true;
+        }
+        
+        // Match assignments buffer (pairs of individual indices)
+        let assignments_buffer_size = (total_matches * 2 * std::mem::size_of::<u32>()) as u64;
+        if self.match_assignments_buffer.as_ref().map_or(true, |b| b.size() < assignments_buffer_size) {
+            info!("Allocating match assignments buffer: {} bytes", assignments_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Match Assignments Buffer"),
+                size: assignments_buffer_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.match_assignments_buffer = Some(buffer);
+            reallocate_bind_group = true;
+        }
+
+        // Match results buffer
+        let results_buffer_size = (total_matches * std::mem::size_of::<MatchResult>()) as u64;
+        if self.match_results_buffer.as_ref().map_or(true, |b| b.size() < results_buffer_size) {
+            info!("Allocating match results buffer: {} bytes", results_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Match Results Buffer"),
+                size: results_buffer_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            self.match_results_buffer = Some(buffer);
+            reallocate_bind_group = true;
+        }
+
+        // Staging buffer for reading results
+        if self.staging_buffer.as_ref().map_or(true, |b| b.size() < results_buffer_size) {
+            info!("Allocating staging buffer: {} bytes", results_buffer_size);
+            let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Staging Buffer"),
+                size: results_buffer_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.staging_buffer = Some(buffer);
+        }
+
+        // Re-create bind group if any buffers were reallocated
+        if self.bind_group.is_none() || reallocate_bind_group {
+            info!("Creating GPU bind group for round-robin processing.");
+            let bind_group = self.context.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Round-Robin Processing Bind Group"),
+                layout: &self.context.batch_pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.population_weights_buffer.as_ref().unwrap().as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.match_assignments_buffer.as_ref().unwrap().as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.match_results_buffer.as_ref().unwrap().as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.batch_config_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+            self.bind_group = Some(bind_group);
+        }
+        
+        Ok(())
     }
 }
 

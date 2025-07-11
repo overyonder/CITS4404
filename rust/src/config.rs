@@ -244,6 +244,10 @@ pub struct Config {
     /// **Range**: 0.1-10.0, where 1.0 = normal speed, 2.0 = 2x faster, 0.5 = half speed
     /// **Purpose**: Allows fine-tuning of training visualization speed for optimal observation
     pub simulation_speed: f32,
+    /// Path to a saved champion model to seed the population with
+    /// **Purpose**: Enables transfer learning by starting evolution from a previously trained model
+    /// **Effect**: A portion of the population will be initialized with this champion's weights
+    pub champion_seed_path: Option<String>,
 }
 
 /// Provides a scientifically sound default configuration for the evolutionary algorithm.
@@ -271,7 +275,7 @@ impl Default for Config {
             concurrent: true,
 
             // Population parameters
-            population_size: 2048,
+            population_size: 1024*3,
             elite_count: 32,
 
             // Selection parameters
@@ -304,6 +308,7 @@ impl Default for Config {
             random_ball_direction: true,
             random_seed: None,
             simulation_speed: 1.0,
+            champion_seed_path: None,
         }
     }
 }
