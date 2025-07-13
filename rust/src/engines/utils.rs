@@ -1,17 +1,9 @@
-//! Utility functions for performance optimization, mathematical operations, and benchmarking.
+//! Utility functions for neural network engines.
 //!
-//! This module provides helper functions used throughout the codebase for:
+//! This module provides helper functions used by neural network engines for:
 //! - High-performance mathematical operations (dot products, activation functions)
 //! - Educational demonstrations of optimization techniques
 //! - Clear examples of Rust performance patterns for students
-//!
-//! # Teaching Note: Performance Engineering in Evolutionary Algorithms
-//! Performance optimization is critical in evolutionary algorithms due to their
-//! computational intensity. This module demonstrates several optimization principles:
-//! - Iterator chain optimization for mathematical operations
-//! - Function dispatching patterns for runtime polymorphism
-//! - Clear, readable code that still performs well
-//! - Educational examples that students can understand and modify
 
 use crate::config::Activation;
 
@@ -98,8 +90,4 @@ pub fn apply_activation(value: f32, activation: Activation) -> f32 {
         Activation::Sigmoid => 1.0 / (1.0 + (-value).exp()),
         Activation::Linear => value,
     }
-}
-
-
-
-
+} 

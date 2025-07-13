@@ -29,13 +29,10 @@ fakeit = "1.3.0"
 strum = { version = "0.27.1", features = ["derive"] }
 palette = "0.7.6"
 chrono = { version = "0.4.41", features = ["serde"] }
-# PyTorch bindings for CUDA acceleration
-tch = { version = "0.20", optional = true }
+
 
 [dev-dependencies]
 tempfile = "3.10.1"
 
 [features]
 default = []
-# Enable PyTorch/CUDA support (requires libtorch installation)
-torch = ["dep:tch"]

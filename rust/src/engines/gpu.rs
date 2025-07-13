@@ -4,7 +4,7 @@
 //! # Teaching Note: GPU Computing in Machine Learning
 //! GPUs excel at parallel computation, making them ideal for neural network operations.
 //! While this implementation focuses on forward propagation, modern ML frameworks
-//! like TensorFlow and PyTorch use similar principles for both forward and backward
+//! like TensorFlow use similar principles for both forward and backward
 //! passes, training massive networks with millions of parameters in parallel.
 //!
 //! # New: Mass Parallel Processing Architecture
@@ -14,7 +14,7 @@
 //! - **Memory Optimization**: Efficient GPU memory management for large populations
 //! - **Scalability**: Performance scales linearly with GPU compute units
 
-use crate::{config::Activation, constants::*, traits::Individual, Config};
+use crate::{config::Activation, engines::constants::*, traits::Individual, Config};
 use bytemuck::{Pod, Zeroable};
 use once_cell::sync::Lazy;
 use pollster::block_on;
@@ -47,7 +47,6 @@ struct GpuContext {
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,           // Single individual pipeline
     batch_pipeline: wgpu::ComputePipeline,     // Batch tournament pipeline
-    max_compute_units: u32,                    // GPU compute capability info
 }
 
 /// Uniform data passed from the CPU to the GPU shader.
@@ -271,7 +270,6 @@ impl GpuContext {
             queue,
             pipeline,
             batch_pipeline,
-            max_compute_units,
         })
     }
 
@@ -642,7 +640,6 @@ impl<'a> GpuIndividual<'a> {
 /// This ensures identical behavior to CPU version while gaining GPU acceleration.
 pub struct GpuBatchEngine {
     context: &'static GpuContext,
-    max_population_size: usize,
     // GPU buffers for round-robin processing  
     population_weights_buffer: Option<wgpu::Buffer>,
     match_assignments_buffer: Option<wgpu::Buffer>,
@@ -670,7 +667,6 @@ impl GpuBatchEngine {
 
         Ok(GpuBatchEngine {
             context,
-            max_population_size,
             population_weights_buffer: None,
             match_assignments_buffer: None,
             match_results_buffer: None,

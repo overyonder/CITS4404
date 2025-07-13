@@ -21,9 +21,12 @@
 
 use crate::{
     config::{Config, FitnessFunc},
-    constants::*,
     traits::Individual,
 };
+
+pub mod constants;
+pub mod keyboard_controller;
+pub use constants::*;
 use rand_distr::{Distribution, Normal};
 
 /// Represents the complete state of a Pong game simulation at a single point in time.

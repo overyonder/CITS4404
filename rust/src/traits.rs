@@ -5,7 +5,7 @@
 //! in a uniform way. This is a key example of the **Strategy Pattern** in action.
 
 use crate::config::{Activation, Config};
-use crate::constants::{INPUT_SIZE, OUTPUT_SIZE, TOTAL_WEIGHTS};
+use crate::engines::constants::{INPUT_SIZE, OUTPUT_SIZE, TOTAL_WEIGHTS};
 use rand::Rng;
 use rand_distr::Distribution;
 use serde::{Deserialize, Serialize};

@@ -8,7 +8,6 @@
 //! - Consistent visual styling and color coding
 
 use crate::{
-    cpp_compat,
     tui::{
         app::{App, AppState, ModelInfo, SimulationSetupState},
         model_loader,
@@ -49,9 +48,9 @@ const MENU_ITEMS: &[(
         "Genetic algorithms mimic natural evolution to optimize neural networks"
     ),
     (
-        "🎮 Simulate",
-        "Watch trained models play Pong and compare their strategies",
-        "Test your evolved AI agents in real-time gameplay scenarios"
+        "🎮 Play",
+        "Watch trained models play Pong, compare strategies, or play yourself",
+        "Test your evolved AI agents in real-time gameplay scenarios and human vs AI matches"
     ),
     (
         "❌ Exit",
@@ -126,7 +125,7 @@ fn handle_menu_selection(app: &mut App, selected: usize) {
             app.error_message = None;
         }
         1 => {
-            // "Simulate" - Enhanced model loading with better error messages
+            // "Play" - Enhanced model loading with better error messages
             match load_models_from_dir(Path::new("models")) {
                 Ok(models) => {
                     if models.is_empty() {
@@ -186,21 +185,10 @@ fn load_models_from_dir(dir: &Path) -> io::Result<Vec<ModelInfo>> {
             continue;
         }
 
-        // Handle C++ legacy format (.log files)
+        // Skip legacy C++ format files (.log files) since compatibility layer is removed
         let is_cpp = path.extension().map_or(false, |ext| ext == "log");
         if is_cpp {
-            match cpp_compat::load_cpp_champion(&path.to_string_lossy()) {
-                Ok((_weights, config)) => {
-                    models.push(ModelInfo {
-                        path,
-                        config,
-                        is_cpp: true,
-                    });
-                }
-                Err(e) => {
-                    errors.push(format!("Failed to load C++ model {:?}: {}", path.file_name(), e));
-                }
-            }
+            continue; // Skip C++ files since compatibility layer is removed
         }
         // Handle modern JSON format 
         else if path.extension().map_or(false, |ext| ext == "json") {
@@ -213,7 +201,6 @@ fn load_models_from_dir(dir: &Path) -> io::Result<Vec<ModelInfo>> {
                     models.push(ModelInfo {
                         path,
                         config,
-                        is_cpp: false,
                     });
                 }
                 Err(e) => {

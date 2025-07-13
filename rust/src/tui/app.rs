@@ -31,7 +31,6 @@ pub enum AppState {
 pub struct ModelInfo {
     pub path: std::path::PathBuf,
     pub config: Config,
-    pub is_cpp: bool,
 }
 
 /// Holds the state for the simulation model selection UI.

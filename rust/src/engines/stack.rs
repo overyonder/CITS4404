@@ -1,6 +1,6 @@
 //! A neural network engine where all weights are stored in a single, stack-allocated array.
 
-use crate::{config::Activation, constants::*, traits::Individual, utils};
+use crate::{config::Activation, engines::{constants::*, utils}, traits::Individual};
 use rand::Rng;
 
 /// A neural network individual using a stack-allocated, fixed-size array for its weights.

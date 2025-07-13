@@ -1,12 +1,9 @@
 mod config;
-mod constants;
-mod cpp_compat;
 mod engines;
+mod evolution;
 mod gamestate;
-mod population;
 mod traits;
 mod tui;
-mod utils;
 
 use std::{fs, io, path::Path};
 
@@ -17,8 +14,8 @@ use tracing_subscriber::EnvFilter;
 use crate::{
     config::{Config, Engine},
     engines::StackIndividual,
+    evolution::Population,
     gamestate::GameState,
-    population::Population,
     traits::Individual,
     tui::ui::run_app,
 };
@@ -135,11 +132,8 @@ fn run_cli(args: Args) {
     let engine = match args.engine.as_str() {
         "cpu" => Engine::Cpu,
         "gpu" => Engine::Gpu,
-        #[cfg(feature = "torch")]
-        "torch" | "pytorch" => Engine::Torch,
         other => {
-            error!("Unknown engine: {}. Available options: cpu, gpu{}. Exiting.", other, 
-                   if cfg!(feature = "torch") { ", torch" } else { "" });
+            error!("Unknown engine: {}. Available options: cpu, gpu. Exiting.", other);
             return;
         }
     };
@@ -212,14 +206,6 @@ fn run_cli(args: Args) {
         Engine::Cpu => run_evolution!(StackIndividual, config, args),
         // GPU batch processing uses lightweight StackIndividual with GpuBatchEngine for GPU operations
         Engine::Gpu => run_evolution!(StackIndividual, config, args),
-        #[cfg(feature = "torch")]
-        Engine::Torch => {
-            #[cfg(feature = "torch")]
-            {
-                use crate::engines::TorchIndividual;
-                run_evolution!(TorchIndividual, config, args)
-            }
-        }
     };
 
     info!("Evolution finished.");

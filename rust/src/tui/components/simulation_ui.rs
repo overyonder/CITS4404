@@ -2,7 +2,7 @@
 
 use crate::{
     config::Config,
-    constants::{PADDLE_HEIGHT, WIDTH},
+    gamestate::constants::{PADDLE_HEIGHT, WIDTH},
     tui::{
         app::{App, AppState},
         simulation::SimulationState,
@@ -52,7 +52,7 @@ pub fn draw_simulation_ui(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_pong_canvas(f: &mut Frame, sim_state: &SimulationState, area: Rect) {
     // Calculate proper aspect ratio based on game dimensions
     let game_width = WIDTH as f64;
-    let game_height = crate::constants::HEIGHT as f64;
+            let game_height = crate::gamestate::constants::HEIGHT as f64;
     let game_aspect_ratio = game_width / game_height;
     
     // Calculate the maximum size we can use while maintaining aspect ratio

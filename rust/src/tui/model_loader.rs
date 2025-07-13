@@ -7,7 +7,7 @@
 //! GPU, or other neural network backends.
 
 use crate::config::Config;
-use crate::constants::TOTAL_WEIGHTS;
+use crate::engines::constants::TOTAL_WEIGHTS;
 use crate::traits::SerializableIndividual;
 use std::path::Path;
 

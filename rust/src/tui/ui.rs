@@ -99,7 +99,7 @@ fn handle_events(app: &mut App) -> Result<()> {
                                 } else {
                                     app.error_message = Some(format!(
                                         "Genome size mismatch. Expected {}, found {}.",
-                                        crate::constants::TOTAL_WEIGHTS,
+                                        crate::engines::constants::TOTAL_WEIGHTS,
                                         genome.len()
                                     ));
                                 }

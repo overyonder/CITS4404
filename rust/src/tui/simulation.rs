@@ -1,9 +1,8 @@
 //! Simulation state and logic for Pong visualization in the TUI.
 use crate::{
     config::Config,
-    constants::PADDLE_MAX_VEL,
     engines::StackIndividual, // Using StackIndividual as a concrete type for the simulation brain
-    gamestate::GameState,
+    gamestate::{constants::PADDLE_MAX_VEL, GameState},
     traits::Individual,
 };
 
