@@ -1,40 +1,41 @@
-use rand::{self, seq::IteratorRandom, Rng, distributions::Normal};
+use rand::{self, Rng, seq::IteratorRandom};
+use rand_distr::Distribution;
 use rayon::prelude::*;
 
 const WEIGHTS: usize = 9 * 16 + 17 * 4 + 5 * 1;
 const TOURNAMENT_SIZE: usize = 5;
 
 const MEAN: f32 = 0.0;
-const STD_DEV: f32 = 1.0; // A common default standard deviation is 1.0
+const STD_DEV: f32 = 0.1;
 
 /// An individual neural network in the population.
 /// Contains its weights and fitness score from tournament evaluation.
 pub struct Individual {
-    weights: [f32; WEIGHTS],
-    fitness: i8,
+    pub weights: [f32; WEIGHTS],
+    pub fitness: i8,
 }
 
 impl Default for Individual {
     fn default() -> Self {
         let mut array = [0.0; WEIGHTS];
         // Initialize weights with random values in parallel
-        array
-            .par_iter_mut()
-            .for_each(|w| *w = rand::rng().random());
-        Self { weights: array, fitness: 0 }
+        array.par_iter_mut().for_each(|w| *w = rand::rng().random_range(-1.0..=1.0));
+        Self {
+            weights: array,
+            fitness: 0,
+        }
     }
 }
 
 impl Individual {
     /// Mutates all weights by adding a small random value from a normal distribution and resets fitness.
     fn mutate(&mut self) {
-        self.weights
-            .par_iter_mut()
-            .for_each(|weight| {
-                let normal = rand::distributions::Normal::new(MEAN, STD_DEV);
-                let delta = normal.sample(rand::rng());
-                *weight += delta as f32;
-            });
+        self.weights.par_iter_mut().for_each(|weight| {
+            let normal = rand_distr::Normal::new(MEAN, STD_DEV).unwrap();
+            let delta = normal.sample(&mut rand::rng());
+            *weight += delta as f32;
+            *weight = (*weight).clamp(-1.0, 1.0);
+        });
         self.fitness = 0;
     }
 
@@ -49,7 +50,7 @@ impl Individual {
 /// A population of neural networks undergoing evolutionary training.
 /// Designed as immutable to maintain a single memory structure without copying.
 pub struct Group {
-    individuals: Vec<Individual>,
+    pub individuals: Vec<Individual>,
 }
 
 impl Group {
@@ -75,7 +76,7 @@ impl Group {
     pub fn train(&mut self) {
         let len = self.individuals.len();
         let mut rng = rand::rng();
-    
+
         for i in 0..len {
             // Split array to get current individual and all others
             let (before, rest) = self.individuals.split_at_mut(i);
@@ -85,8 +86,8 @@ impl Group {
             let others: Vec<&Individual> = before
                 .iter()
                 .chain(after.iter())
-                .choose_multiple(&mut rng, TOURNAMENT_SIZE-1);
-    
+                .choose_multiple(&mut rng, TOURNAMENT_SIZE - 1);
+
             // Fight against each opponent
             for opponent in &others {
                 current.fight(opponent);
