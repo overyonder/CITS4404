@@ -12,14 +12,19 @@ use pong_ai::nn::Group;
 
 const POP_SIZE: usize = 2048;
 const GENERATIONS: usize = 512;
-const TOURNAMENT_SIZE: usize = POP_SIZE / 12;
+const TOURNAMENT_SIZE: usize = {
+    let mut i = 1;
+    while i * i < POP_SIZE {
+        i += 1;
+    }
+    i
+};
 const ELITES: usize = {
-    POP_SIZE / 2
-    // let mut i = 1;
-    // while i * i < POP_SIZE {
-    //     i += 1;
-    // }
-    // i
+    let mut i = 1;
+    while i * i < POP_SIZE {
+        i += 1;
+    }
+    i
 };
 
 #[macroquad::main("MyGame")]
@@ -33,23 +38,31 @@ async fn main() {
     //     up_key: KeyCode::Up,
     //     down_key: KeyCode::Down,
     // };
-    println!("ELITES: {}", ELITES);
-    println!("POP_SIZE: {}", POP_SIZE);
-    println!("GENERATIONS: {}", GENERATIONS);
 
     let mut group = Group::new(POP_SIZE);
+    let start = Instant::now();
+    let mut round = Instant::now();
     for i in 0..GENERATIONS {
-        let start = Instant::now();
-        group.train(TOURNAMENT_SIZE);
+        let longest_match = group.train(TOURNAMENT_SIZE);
         group.individuals.sort();
         if i % 48 == 0 {
-            println!("Generation: {}", i);
+            println!("Generations: {}", GENERATIONS);
+            println!("Generations complete: {}", (i + 1));
             println!("Population size: {}", POP_SIZE);
+            println!("Elites: {}", ELITES);
             println!("Tournament size: {}", TOURNAMENT_SIZE);
-            println!("Matches done: {}", i * POP_SIZE * (TOURNAMENT_SIZE - 1));
+            println!(
+                "Matches done: {}",
+                (i + 1) * POP_SIZE * (TOURNAMENT_SIZE - 1)
+            );
+            println!("Elapsed time: {:?}", start.elapsed());
+            println!("Round time: {:?}", round.elapsed());
+            round = Instant::now();
+            println!("Longest match: {} ticks", longest_match);
+            println!("Matches per round: {}", POP_SIZE * (TOURNAMENT_SIZE - 1));
             println!(
                 "Matches per second: {}",
-                (POP_SIZE * (TOURNAMENT_SIZE - 1)) as f64 / start.elapsed().as_secs_f64()
+                (POP_SIZE * (TOURNAMENT_SIZE - 1)) as f64 / round.elapsed().as_secs_f64()
             );
             println!(
                 "Fitness range: {} - {}",

@@ -4,7 +4,7 @@ use rand::{self, Rng, seq::IteratorRandom};
 use rand_distr::Distribution;
 use rayon::prelude::*;
 
-use crate::game::state::{Game, Side};
+use crate::game::state::Side;
 
 const WEIGHTS: usize = 9 * 16 + 17 * 4 + 5 * 1;
 
@@ -116,14 +116,15 @@ impl Group {
 
     /// Performs tournament evaluation on all individuals.
     /// Each individual fights against 4 randomly chosen opponents.
-    pub fn train(&mut self, tournament_size: usize) {
+    pub fn train(&mut self, tournament_size: usize) -> usize {
         let len = self.individuals.len();
         use crate::game::state::Game;
         use std::cell::RefCell;
         use thread_local::ThreadLocal;
         // Thread-local Game for each thread
         let games = ThreadLocal::new();
-        let fitness_deltas: Vec<i8> = (0..len)
+        // Store (fitness_delta, longest_match_ticks) for each individual
+        let results: Vec<(i8, usize)> = (0..len)
             .into_par_iter()
             .map(|i| {
                 let (before, rest) = self.individuals.split_at(i);
@@ -136,24 +137,31 @@ impl Group {
                 // Use the thread's own Game instance
                 let game_cell = games.get_or(|| RefCell::new(Game::default()));
                 let mut delta = 0;
+                let mut indiv_longest = 0;
                 for (j, &opponent) in others.iter().enumerate() {
                     let mut game = game_cell.borrow_mut();
                     *game = Game::default(); // Reset game state
-                    match game.run_until(
+                    let (winner, ticks) = game.run_until(
                         current,
                         opponent,
                         if j % 2 == 0 { Side::Left } else { Side::Right },
-                    ) {
+                    );
+                    if ticks > indiv_longest {
+                        indiv_longest = ticks;
+                    }
+                    match winner {
                         Side::Left => delta += 1,
                         Side::Right => delta -= 1,
                     }
                 }
-                delta
+                (delta, indiv_longest)
             })
             .collect();
         // Second pass: apply fitness deltas
-        for (ind, delta) in self.individuals.iter_mut().zip(fitness_deltas) {
-            ind.fitness += delta;
+        for (ind, (delta, _)) in self.individuals.iter_mut().zip(&results) {
+            ind.fitness += *delta;
         }
+        let longest_match_ticks = results.iter().map(|(_, ticks)| *ticks).max().unwrap_or(0);
+        longest_match_ticks
     }
 }
