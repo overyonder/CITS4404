@@ -2,7 +2,6 @@ use rand_distr::Distribution;
 
 use super::controllers::Controller;
 
-pub const DEFAULTS: [f32; 8] = [0.5, 0., 0.5, 0., 0.5, BALL_START_VEL, 0.5, BALL_START_VEL];
 pub const DEF_MEAN: f32 = 0.;
 pub const BALL_START_VEL: f32 = 0.01;
 pub const DEF_STD_DEV: f32 = 0.05;
@@ -19,7 +18,7 @@ pub const MAX_VEL: f32 = 1. / FRAME_RATE;
 pub const MIN_Y: f32 = PADDLE_LENGTH / 2.;
 pub const MAX_Y: f32 = 1. - PADDLE_LENGTH / 2.;
 
-#[derive(PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Side {
     Left,
     Right,
@@ -27,119 +26,165 @@ pub enum Side {
 
 /// Gamestate. Contains a complete representation of a single match point.
 pub struct Game {
-    /// - 0 = left_pos,
-    /// - 1 = left_vel,
-    /// - 2 = right_pos,
-    /// - 3 = right_vel,
-    /// - 4 = ball_pos_x,
-    /// - 5 = ball_vel_x,
-    /// - 6 = ball_pos_y,
-    /// - 7 = ball_vel_y
-    pub state: [f32; 8],
+    /// - 0 = left_pos,      // [-0.5, 0.5]
+    /// - 1 = left_vel,      // [-1, 1]
+    /// - 2 = right_pos,     // [-0.5, 0.5]
+    /// - 3 = right_vel,     // [-1, 1]
+    /// - 4 = ball_pos_x,    // [-0.5, 0.5]
+    /// - 5 = ball_vel_x,    // [-1, 1]
+    /// - 6 = ball_pos_y,    // [-0.5, 0.5]
+    /// - 7 = ball_vel_y,    // [-1, 1]
+    /// - 8 = bias           // 1.0
+    pub state: [f32; 9],
 }
 
 impl Default for Game {
     fn default() -> Self {
-        Self { state: DEFAULTS }
+        Self {
+            state: [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                BALL_START_VEL / MAX_VEL,
+                0.0,
+                BALL_START_VEL / MAX_VEL,
+                1.0,
+            ],
+        }
     }
 }
 
 impl Game {
     pub fn reset(&mut self, serve: Side) {
-        self.state = DEFAULTS;
+        self.state = [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            BALL_START_VEL / MAX_VEL,
+            0.0,
+            BALL_START_VEL / MAX_VEL,
+            1.0,
+        ];
         if serve == Side::Left {
-            self.state[5] = BALL_START_VEL;
+            self.state[5] = BALL_START_VEL / MAX_VEL;
         } else {
-            self.state[5] = -BALL_START_VEL;
+            self.state[5] = -BALL_START_VEL / MAX_VEL;
         }
     }
 
     pub fn run_until<T: Controller, U: Controller>(
         &mut self,
         left_controller: &T,
-        right_controller: &U
+        right_controller: &U,
+        serve: Side,
     ) -> Side {
-        let mut result = None;
-        while result.is_none() {
-            result = self.tick(left_controller, right_controller);
+        let max_ticks = (FRAME_RATE * 30.) as usize;
+        let mut ticks = 0;
+        self.reset(serve);
+        loop {
+            if ticks >= max_ticks {
+                return Side::Left;
+            }
+            let result = self.tick(left_controller, right_controller);
+            if let Some(winner) = result {
+                return winner;
+            }
+            ticks += 1;
         }
-        return result.unwrap();
     }
 
     pub fn tick<T: Controller, U: Controller>(
         &mut self,
         left_controller: &T,
-        right_controller: &U
+        right_controller: &U,
     ) -> Option<Side> {
         // Left update
-        *self.left_vel_mut() = left_controller.pass(&self.state) * MAX_VEL;
-        *self.left_pos_mut() += self.left_vel();
-        if self.left_pos() <= MIN_Y - f32::EPSILON {
-            *self.left_pos_mut() = MIN_Y;
-            *self.left_vel_mut() = self.left_vel_mut().clamp(0., MAX_VEL);
-        } else if self.left_pos() >= MAX_Y + f32::EPSILON {
-            *self.left_pos_mut() = MAX_Y;
-            *self.left_vel_mut() = self.left_vel_mut().clamp(-MAX_VEL, 0.);
+        *self.left_vel_mut() = left_controller.pass(&self.state);
+        *self.left_pos_mut() += self.left_vel() * MAX_VEL / HEIGHT;
+        if self.left_pos() <= -0.5 + PADDLE_LENGTH / 2. {
+            *self.left_pos_mut() = -0.5 + PADDLE_LENGTH / 2.;
+            *self.left_vel_mut() = self.left_vel_mut().clamp(0., 1.);
+        } else if self.left_pos() >= 0.5 - PADDLE_LENGTH / 2. {
+            *self.left_pos_mut() = 0.5 - PADDLE_LENGTH / 2.;
+            *self.left_vel_mut() = self.left_vel_mut().clamp(-1., 0.);
         }
 
         // Right update
-        *self.right_vel_mut() = right_controller.pass(&self.state) * MAX_VEL;
-        *self.right_pos_mut() += self.right_vel();
-        if self.right_pos() <= MIN_Y - f32::EPSILON {
-            *self.right_pos_mut() = MIN_Y;
-            *self.right_vel_mut() = self.right_vel_mut().clamp(0., MAX_VEL);
-        } else if self.right_pos() >= MAX_Y + f32::EPSILON {
-            *self.right_pos_mut() = MAX_Y;
-            *self.right_vel_mut() = self.right_vel_mut().clamp(-MAX_VEL, 0.);
+        // Flip state for right paddle: x positions and velocities are scaled by WIDTH
+        let flipped_state = [
+            self.state[2],  // right_pos
+            self.state[3],  // right_vel
+            self.state[0],  // left_pos
+            self.state[1],  // left_vel
+            -self.state[4], // ball_pos_x (negate, but still in [-0.5, 0.5])
+            -self.state[5], // ball_vel_x
+            self.state[6],  // ball_pos_y
+            self.state[7],  // ball_vel_y
+            self.state[8],  // bias
+        ];
+        *self.right_vel_mut() = right_controller.pass(&flipped_state);
+        *self.right_pos_mut() += self.right_vel() * MAX_VEL / HEIGHT;
+        if self.right_pos() <= -0.5 + PADDLE_LENGTH / 2. {
+            *self.right_pos_mut() = -0.5 + PADDLE_LENGTH / 2.;
+            *self.right_vel_mut() = self.right_vel_mut().clamp(0., 1.);
+        } else if self.right_pos() >= 0.5 - PADDLE_LENGTH / 2. {
+            *self.right_pos_mut() = 0.5 - PADDLE_LENGTH / 2.;
+            *self.right_vel_mut() = self.right_vel_mut().clamp(-1., 0.);
         }
 
-        // Ball update
-        *self.ball_pos_x_mut() += self.ball_vel_x();
-        *self.ball_pos_y_mut() += self.ball_vel_y();
+        // Ball update: scale velocity by WIDTH for x
+        *self.ball_pos_x_mut() += self.ball_vel_x() * MAX_VEL / WIDTH;
+        *self.ball_pos_y_mut() += self.ball_vel_y() * MAX_VEL / HEIGHT;
 
-        // Ball to score zone
-        if self.ball_pos_x() <= PADDLE_WIDTH - f32::EPSILON {
+        // Ball to score zone (normalized boundaries)
+        let left_x_bound = -0.5 + PADDLE_WIDTH / WIDTH;
+        let right_x_bound = 0.5 - PADDLE_WIDTH / WIDTH;
+        if self.ball_pos_x() <= left_x_bound {
             // Check for rebound
             if self.left_pos() - PADDLE_LENGTH / 2. <= self.ball_pos_y()
                 && self.ball_pos_y() <= self.left_pos() + PADDLE_LENGTH / 2.
             {
-                *self.ball_pos_x_mut() = PADDLE_WIDTH;
+                *self.ball_pos_x_mut() = left_x_bound + f32::EPSILON;
                 *self.ball_vel_x_mut() = -self.ball_vel_x();
                 *self.ball_vel_y_mut() += self.left_vel() * 0.25
                     + rand_distr::Normal::new(DEF_MEAN, DEF_STD_DEV)
                         .unwrap()
                         .sample(&mut rand::rng())
-                        * BALL_START_VEL;
+                        * BALL_START_VEL
+                        / MAX_VEL;
             } else {
-                // Otherwise score and reset
                 self.reset(Side::Left);
                 return Some(Side::Right);
             }
-        } else if self.ball_pos_x() >= WIDTH - PADDLE_WIDTH + f32::EPSILON {
+        } else if self.ball_pos_x() >= right_x_bound {
             // Check for rebound
             if self.right_pos() - PADDLE_LENGTH / 2. <= self.ball_pos_y()
                 && self.ball_pos_y() <= self.right_pos() + PADDLE_LENGTH / 2.
             {
-                *self.ball_pos_x_mut() = WIDTH - PADDLE_WIDTH;
+                *self.ball_pos_x_mut() = right_x_bound - f32::EPSILON;
                 *self.ball_vel_x_mut() = -self.ball_vel_x();
                 *self.ball_vel_y_mut() += self.right_vel() * 0.25
                     + rand_distr::Normal::new(DEF_MEAN, DEF_STD_DEV)
                         .unwrap()
                         .sample(&mut rand::rng())
-                        * BALL_START_VEL;
+                        * BALL_START_VEL
+                        / MAX_VEL;
             } else {
-                // Otherwise score and reset
                 self.reset(Side::Right);
                 return Some(Side::Left);
             }
         }
 
         // Ball to ceil/floor
-        if self.ball_pos_y() < 0. {
-            *self.ball_pos_y_mut() = 0.;
+        if self.ball_pos_y() < -0.5 {
+            *self.ball_pos_y_mut() = -0.5;
             *self.ball_vel_y_mut() = -self.ball_vel_y();
-        } else if self.ball_pos_y() >= 1. {
-            *self.ball_pos_y_mut() = 1.;
+        } else if self.ball_pos_y() > 0.5 {
+            *self.ball_pos_y_mut() = 0.5;
             *self.ball_vel_y_mut() = -self.ball_vel_y();
         }
 

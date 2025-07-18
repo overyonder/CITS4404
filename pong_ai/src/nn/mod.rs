@@ -6,25 +6,6 @@ use rayon::prelude::*;
 
 use crate::game::state::{Game, Side};
 
-const BIAS_INDICES: [usize; 21] = {
-    let mut arr = [0; 21];
-    let mut idx = 0;
-    let mut i = 128;
-    while i <= 143 {
-        arr[idx] = i;
-        idx += 1;
-        i += 1;
-    }
-    i = 208;
-    while i <= 211 {
-        arr[idx] = i;
-        idx += 1;
-        i += 1;
-    }
-    arr[20] = 216;
-    arr
-};
-
 const WEIGHTS: usize = 9 * 16 + 17 * 4 + 5 * 1;
 
 const MEAN: f32 = 0.;
@@ -40,14 +21,26 @@ pub struct Individual {
 impl Default for Individual {
     fn default() -> Self {
         let mut array = [0.; WEIGHTS];
-        // Initialize weights with random values in parallel
-        array.par_iter_mut().enumerate().for_each(|(i, w)| {
-            if !BIAS_INDICES.contains(&i) {
-                *w = 1.;
-            } else {
-                *w = rand::rng().random_range(-1. ..=1.);
-            }
-        });
+        let mut rng = rand::rng();
+        use rand_distr::{Distribution, Normal};
+        // First hidden layer (16 neurons, 9 inputs each)
+        let std1 = (2.0_f32 / 9.0_f32).sqrt();
+        let normal1 = Normal::new(0.0, std1).unwrap();
+        for i in 0..(16 * 9) {
+            array[i] = normal1.sample(&mut rng);
+        }
+        // Second hidden layer (4 neurons, 17 inputs each)
+        let std2 = (2.0_f32 / 17.0_f32).sqrt();
+        let normal2 = Normal::new(0.0, std2).unwrap();
+        for i in (16 * 9)..(16 * 9 + 4 * 17) {
+            array[i] = normal2.sample(&mut rng);
+        }
+        // Output layer (1 neuron, 5 inputs)
+        let std3 = (2.0_f32 / 5.0_f32).sqrt();
+        let normal3 = Normal::new(0.0, std3).unwrap();
+        for i in (16 * 9 + 4 * 17)..WEIGHTS {
+            array[i] = normal3.sample(&mut rng);
+        }
         Self {
             weights: array,
             fitness: 0,
@@ -78,19 +71,12 @@ impl Ord for Individual {
 impl Individual {
     /// Mutates all weights by adding a small random value from a normal distribution and resets fitness.
     fn mutate(&mut self) {
-        self.weights
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, weight)| {
-                if !BIAS_INDICES.contains(&i) {
-                    return;
-                }
-                *weight += rand_distr::Normal::new(MEAN, STD_DEV)
-                    .unwrap()
-                    .sample(&mut rand::rng()) as f32;
-                *weight = (*weight).clamp(-1., 1.);
-            });
-        self.fitness = 0;
+        self.weights.par_iter_mut().for_each(|weight| {
+            *weight += rand_distr::Normal::new(MEAN, STD_DEV)
+                .unwrap()
+                .sample(&mut rand::rng()) as f32;
+            *weight = (*weight).clamp(-1., 1.);
+        });
     }
 }
 
@@ -112,39 +98,62 @@ impl Group {
     }
 
     /// Mutates all individuals in the population in parallel.
-    pub fn mutate(&mut self, elites: usize) {
-        self.individuals
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(i, individual)| {
-                if i >= elites {
-                    individual.mutate();
-                }
-            });
+    pub fn mutate(&mut self, elites: usize, pop_size: usize) {
+        let (non_elites, elites_slice) = self.individuals.split_at_mut(pop_size - elites);
+        non_elites.par_iter_mut().for_each(|individual| {
+            let elite_idx = rand::rng().random_range(0..elites);
+            individual
+                .weights
+                .copy_from_slice(&elites_slice[elite_idx].weights);
+            individual.mutate();
+            individual.fitness = 0;
+        });
+        // Reset fitness for elites
+        for elite in elites_slice.iter_mut() {
+            elite.fitness = 0;
+        }
     }
 
     /// Performs tournament evaluation on all individuals.
     /// Each individual fights against 4 randomly chosen opponents.
-    pub fn train(&mut self, game: &mut Game, tournament_size: usize) {
+    pub fn train(&mut self, tournament_size: usize) {
         let len = self.individuals.len();
-        for i in 0..len {
-            // Split array to get current individual and all others
-            let (before, rest) = self.individuals.split_at_mut(i);
-            let (current, after) = rest.split_first_mut().unwrap();
-
-            // Select random opponents from remaining individuals
-            let others: Vec<&Individual> = before
-                .iter()
-                .chain(after.iter())
-                .choose_multiple(&mut rand::rng(), tournament_size - 1);
-
-            // Fight against each opponent
-            for (i, &opponent) in others.iter().enumerate() {
-                match game.run_until(current, opponent) {
-                    Side::Left => current.fitness += 1,
-                    Side::Right => current.fitness -= 1,
+        use crate::game::state::Game;
+        use std::cell::RefCell;
+        use thread_local::ThreadLocal;
+        // Thread-local Game for each thread
+        let games = ThreadLocal::new();
+        let fitness_deltas: Vec<i8> = (0..len)
+            .into_par_iter()
+            .map(|i| {
+                let (before, rest) = self.individuals.split_at(i);
+                let (current, after) = rest.split_first().unwrap();
+                // Select random opponents from remaining individuals
+                let others: Vec<&Individual> = before
+                    .iter()
+                    .chain(after.iter())
+                    .choose_multiple(&mut rand::rng(), tournament_size - 1);
+                // Use the thread's own Game instance
+                let game_cell = games.get_or(|| RefCell::new(Game::default()));
+                let mut delta = 0;
+                for (j, &opponent) in others.iter().enumerate() {
+                    let mut game = game_cell.borrow_mut();
+                    *game = Game::default(); // Reset game state
+                    match game.run_until(
+                        current,
+                        opponent,
+                        if j % 2 == 0 { Side::Left } else { Side::Right },
+                    ) {
+                        Side::Left => delta += 1,
+                        Side::Right => delta -= 1,
+                    }
                 }
-            }
+                delta
+            })
+            .collect();
+        // Second pass: apply fitness deltas
+        for (ind, delta) in self.individuals.iter_mut().zip(fitness_deltas) {
+            ind.fitness += delta;
         }
     }
 }
