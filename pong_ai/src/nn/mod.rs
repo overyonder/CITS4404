@@ -14,8 +14,8 @@ const STD_DEV: f32 = 0.1;
 /// An individual neural network in the population.
 /// Contains its weights and fitness score from tournament evaluation.
 pub struct Individual {
-    pub weights: [f32; WEIGHTS],
-    pub fitness: i8,
+    weights: [f32; WEIGHTS],
+    fitness: i8,
 }
 
 impl Default for Individual {
@@ -78,12 +78,20 @@ impl Individual {
             *weight = (*weight).clamp(-1., 1.);
         });
     }
+
+    pub fn get_weights(&self) -> &[f32; WEIGHTS] {
+        &self.weights
+    }
+
+    pub fn get_fitness(&self) -> &i8 {
+        &self.fitness
+    }
 }
 
 /// A population of neural networks undergoing evolutionary training.
 /// Designed as immutable to maintain a single memory structure without copying.
 pub struct Group {
-    pub individuals: Vec<Individual>,
+    individuals: Vec<Individual>,
 }
 
 impl Group {
@@ -95,6 +103,21 @@ impl Group {
                 .map(|_| Individual::default())
                 .collect(),
         }
+    }
+
+    pub fn get_individuals(&self) -> &[Individual] {
+        &self.individuals
+    }
+
+    pub fn get_individuals_mut(&mut self) -> &mut [Individual] {
+        &mut self.individuals
+    }
+
+    pub fn inject_weights(&mut self, weights: &[f32], elites: usize, pop_size: usize) {
+        for individual in self.individuals.iter_mut() {
+            individual.weights.copy_from_slice(weights);
+        }
+        self.mutate(elites, pop_size);
     }
 
     /// Mutates all individuals in the population in parallel.
@@ -152,6 +175,7 @@ impl Group {
                     match winner {
                         Side::Left => delta += 1,
                         Side::Right => delta -= 1,
+                        Side::Neither => continue,
                     }
                 }
                 (delta, indiv_longest)

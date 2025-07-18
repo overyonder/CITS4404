@@ -16,7 +16,7 @@ pub const PADDLE_WIDTH: f32 = PADDLE_LENGTH / 10.;
 
 pub const FRAME_RATE: f32 = 60.;
 pub const MAX_PADDLE_VEL: f32 = 1. / FRAME_RATE;
-pub const MAX_BALL_Y_VEL: f32 = MAX_PADDLE_VEL * 1.25 * FRAME_RATE;
+pub const MAX_BALL_Y_VEL: f32 = MAX_PADDLE_VEL * 1.5 * FRAME_RATE;
 
 pub const MIN_Y: f32 = PADDLE_LENGTH / 2.;
 pub const MAX_Y: f32 = 1. - PADDLE_LENGTH / 2.;
@@ -25,6 +25,7 @@ pub const MAX_Y: f32 = 1. - PADDLE_LENGTH / 2.;
 pub enum Side {
     Left,
     Right,
+    Neither,
 }
 
 /// Gamestate. Contains a complete representation of a single match point.
@@ -90,7 +91,7 @@ impl Game {
         self.reset(serve);
         loop {
             if ticks >= max_ticks {
-                return (Side::Left, ticks);
+                return (Side::Neither, ticks);
             }
             let result = self.tick(left_controller, right_controller);
             if let Some(winner) = result {
@@ -159,8 +160,7 @@ impl Game {
                         .sample(&mut rand::rng())
                         * BALL_START_VEL
                         / MAX_PADDLE_VEL;
-                *self.ball_vel_y_mut() =
-                    self.ball_vel_y().clamp(-MAX_BALL_Y_VEL, MAX_BALL_Y_VEL);
+                *self.ball_vel_y_mut() = self.ball_vel_y().clamp(-MAX_BALL_Y_VEL, MAX_BALL_Y_VEL);
             } else {
                 self.reset(Side::Left);
                 return Some(Side::Right);
@@ -178,8 +178,7 @@ impl Game {
                         .sample(&mut rand::rng())
                         * BALL_START_VEL
                         / MAX_PADDLE_VEL;
-                *self.ball_vel_y_mut() =
-                    self.ball_vel_y().clamp(-MAX_BALL_Y_VEL, MAX_BALL_Y_VEL);
+                *self.ball_vel_y_mut() = self.ball_vel_y().clamp(-MAX_BALL_Y_VEL, MAX_BALL_Y_VEL);
             } else {
                 self.reset(Side::Right);
                 return Some(Side::Left);
