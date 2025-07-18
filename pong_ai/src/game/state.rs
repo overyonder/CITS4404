@@ -15,8 +15,8 @@ pub const PADDLE_LENGTH: f32 = HEIGHT / 8.;
 pub const PADDLE_WIDTH: f32 = PADDLE_LENGTH / 10.;
 
 pub const FRAME_RATE: f32 = 60.;
-
-pub const MAX_PADDLE_Y_SPEED: f32 = 1. / FRAME_RATE / HEIGHT;
+pub const MAX_VEL: f32 = 1. / FRAME_RATE;
+pub const MAX_PADDLE_Y_SPEED: f32 = MAX_VEL / HEIGHT;
 pub const MAX_BALL_Y_SPEED: f32 = MAX_PADDLE_Y_SPEED * 2.0;
 
 pub const MIN_Y: f32 = PADDLE_LENGTH / 2.;
@@ -110,7 +110,7 @@ impl Game {
     ) -> Option<Side> {
         // Left update
         *self.left_vel_mut() = left_controller.pass(&self.state);
-        *self.left_pos_mut() += self.left_vel() * FRAME_RATE / HEIGHT;
+        *self.left_pos_mut() += self.left_vel() * MAX_VEL / HEIGHT;
         if self.left_pos() <= -0.5 + PADDLE_LENGTH / 2. {
             *self.left_pos_mut() = -0.5 + PADDLE_LENGTH / 2.;
             *self.left_vel_mut() = self.left_vel_mut().clamp(0., 1.);
@@ -133,7 +133,7 @@ impl Game {
             self.state[8],  // bias
         ];
         *self.right_vel_mut() = right_controller.pass(&flipped_state);
-        *self.right_pos_mut() += self.right_vel() * FRAME_RATE / HEIGHT;
+        *self.right_pos_mut() += self.right_vel() * MAX_VEL / HEIGHT;
         if self.right_pos() <= -0.5 + PADDLE_LENGTH / 2. {
             *self.right_pos_mut() = -0.5 + PADDLE_LENGTH / 2.;
             *self.right_vel_mut() = self.right_vel_mut().clamp(0., 1.);
@@ -143,8 +143,8 @@ impl Game {
         }
 
         // Ball update: scale velocity by WIDTH for x
-        *self.ball_pos_x_mut() += self.ball_vel_x() * FRAME_RATE / WIDTH;
-        *self.ball_pos_y_mut() += self.ball_vel_y() * FRAME_RATE / HEIGHT;
+        *self.ball_pos_x_mut() += self.ball_vel_x() * MAX_VEL / WIDTH;
+        *self.ball_pos_y_mut() += self.ball_vel_y() * MAX_VEL / HEIGHT;
 
         // Ball to score zone (normalized boundaries)
         let left_x_bound = -0.5 + PADDLE_WIDTH / WIDTH;
