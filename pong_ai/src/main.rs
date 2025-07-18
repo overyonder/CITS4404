@@ -42,10 +42,11 @@ async fn main() {
     let mut group = Group::new(POP_SIZE);
     let start = Instant::now();
     let mut round = Instant::now();
+    let mut longest_match = 0;
     for i in 0..GENERATIONS {
-        let longest_match = group.train(TOURNAMENT_SIZE);
+        longest_match = longest_match.max(group.train(TOURNAMENT_SIZE));
         group.individuals.sort();
-        if i % 48 == 0 {
+        if i % (GENERATIONS/32) == 0 {
             println!("Generations: {}", GENERATIONS);
             println!("Generations complete: {}", (i + 1));
             println!("Population size: {}", POP_SIZE);

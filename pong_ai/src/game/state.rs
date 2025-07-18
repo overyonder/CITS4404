@@ -15,9 +15,8 @@ pub const PADDLE_LENGTH: f32 = HEIGHT / 8.;
 pub const PADDLE_WIDTH: f32 = PADDLE_LENGTH / 10.;
 
 pub const FRAME_RATE: f32 = 60.;
-pub const MAX_VEL: f32 = 1. / FRAME_RATE;
-pub const MAX_PADDLE_Y_SPEED: f32 = MAX_VEL / HEIGHT;
-pub const MAX_BALL_Y_SPEED: f32 = MAX_PADDLE_Y_SPEED * 2.0;
+pub const MAX_PADDLE_VEL: f32 = 1. / FRAME_RATE;
+pub const MAX_BALL_Y_VEL: f32 = MAX_PADDLE_VEL * 1.25 * FRAME_RATE;
 
 pub const MIN_Y: f32 = PADDLE_LENGTH / 2.;
 pub const MAX_Y: f32 = 1. - PADDLE_LENGTH / 2.;
@@ -51,9 +50,9 @@ impl Default for Game {
                 0.0,
                 0.0,
                 0.0,
-                BALL_START_VEL / FRAME_RATE,
+                BALL_START_VEL / MAX_PADDLE_VEL,
                 0.0,
-                BALL_START_VEL / FRAME_RATE,
+                BALL_START_VEL / MAX_PADDLE_VEL,
                 1.0,
             ],
         }
@@ -68,15 +67,15 @@ impl Game {
             0.0,
             0.0,
             0.0,
-            BALL_START_VEL / FRAME_RATE,
+            BALL_START_VEL / MAX_PADDLE_VEL,
             0.0,
-            BALL_START_VEL / FRAME_RATE,
+            BALL_START_VEL / MAX_PADDLE_VEL,
             1.0,
         ];
         if serve == Side::Left {
-            self.state[5] = BALL_START_VEL / FRAME_RATE;
+            self.state[5] = BALL_START_VEL / MAX_PADDLE_VEL;
         } else {
-            self.state[5] = -BALL_START_VEL / FRAME_RATE;
+            self.state[5] = -BALL_START_VEL / MAX_PADDLE_VEL;
         }
     }
 
@@ -86,13 +85,11 @@ impl Game {
         right_controller: &Individual,
         serve: Side,
     ) -> (Side, usize) {
-        let max_ticks = (FRAME_RATE * 30.) as usize;
+        let max_ticks = (FRAME_RATE * 120.) as usize;
         let mut ticks = 0;
         self.reset(serve);
         loop {
             if ticks >= max_ticks {
-                println!("An agent reached 30 seconds without losing. Marked as winner.");
-                println!("Expert agent weights: {:?}", left_controller.weights);
                 return (Side::Left, ticks);
             }
             let result = self.tick(left_controller, right_controller);
@@ -110,7 +107,7 @@ impl Game {
     ) -> Option<Side> {
         // Left update
         *self.left_vel_mut() = left_controller.pass(&self.state);
-        *self.left_pos_mut() += self.left_vel() * MAX_VEL / HEIGHT;
+        *self.left_pos_mut() += self.left_vel() * MAX_PADDLE_VEL / HEIGHT;
         if self.left_pos() <= -0.5 + PADDLE_LENGTH / 2. {
             *self.left_pos_mut() = -0.5 + PADDLE_LENGTH / 2.;
             *self.left_vel_mut() = self.left_vel_mut().clamp(0., 1.);
@@ -133,7 +130,7 @@ impl Game {
             self.state[8],  // bias
         ];
         *self.right_vel_mut() = right_controller.pass(&flipped_state);
-        *self.right_pos_mut() += self.right_vel() * MAX_VEL / HEIGHT;
+        *self.right_pos_mut() += self.right_vel() * MAX_PADDLE_VEL / HEIGHT;
         if self.right_pos() <= -0.5 + PADDLE_LENGTH / 2. {
             *self.right_pos_mut() = -0.5 + PADDLE_LENGTH / 2.;
             *self.right_vel_mut() = self.right_vel_mut().clamp(0., 1.);
@@ -143,8 +140,8 @@ impl Game {
         }
 
         // Ball update: scale velocity by WIDTH for x
-        *self.ball_pos_x_mut() += self.ball_vel_x() * MAX_VEL / WIDTH;
-        *self.ball_pos_y_mut() += self.ball_vel_y() * MAX_VEL / HEIGHT;
+        *self.ball_pos_x_mut() += self.ball_vel_x() * MAX_PADDLE_VEL / WIDTH;
+        *self.ball_pos_y_mut() += self.ball_vel_y() * MAX_PADDLE_VEL / HEIGHT;
 
         // Ball to score zone (normalized boundaries)
         let left_x_bound = -0.5 + PADDLE_WIDTH / WIDTH;
@@ -161,9 +158,9 @@ impl Game {
                         .unwrap()
                         .sample(&mut rand::rng())
                         * BALL_START_VEL
-                        / FRAME_RATE;
+                        / MAX_PADDLE_VEL;
                 *self.ball_vel_y_mut() =
-                    self.ball_vel_y().clamp(-MAX_BALL_Y_SPEED, MAX_BALL_Y_SPEED);
+                    self.ball_vel_y().clamp(-MAX_BALL_Y_VEL, MAX_BALL_Y_VEL);
             } else {
                 self.reset(Side::Left);
                 return Some(Side::Right);
@@ -180,9 +177,9 @@ impl Game {
                         .unwrap()
                         .sample(&mut rand::rng())
                         * BALL_START_VEL
-                        / FRAME_RATE;
+                        / MAX_PADDLE_VEL;
                 *self.ball_vel_y_mut() =
-                    self.ball_vel_y().clamp(-MAX_BALL_Y_SPEED, MAX_BALL_Y_SPEED);
+                    self.ball_vel_y().clamp(-MAX_BALL_Y_VEL, MAX_BALL_Y_VEL);
             } else {
                 self.reset(Side::Right);
                 return Some(Side::Left);
