@@ -4,22 +4,17 @@ use crate::nn::Individual;
 
 use super::controllers::Controller;
 
-pub const DEF_MEAN: f32 = 0.;
-pub const BALL_START_VEL: f32 = 0.01;
-pub const DEF_STD_DEV: f32 = 0.05;
-
 pub const HEIGHT: f32 = 1.;
 pub const WIDTH: f32 = 0.66;
-
 pub const PADDLE_LENGTH: f32 = HEIGHT / 8.;
 pub const PADDLE_WIDTH: f32 = PADDLE_LENGTH / 10.;
-
 pub const FRAME_RATE: f32 = 60.;
-pub const MAX_PADDLE_VEL: f32 = 1. / FRAME_RATE;
-pub const MAX_BALL_Y_VEL: f32 = MAX_PADDLE_VEL * 1.5 * FRAME_RATE;
 
-pub const MIN_Y: f32 = PADDLE_LENGTH / 2.;
-pub const MAX_Y: f32 = 1. - PADDLE_LENGTH / 2.;
+const DEF_MEAN: f32 = 0.;
+const DEF_STD_DEV: f32 = 0.05;
+const MAX_PADDLE_VEL: f32 = 1. / FRAME_RATE;
+const BALL_START_VEL: f32 = 0.01;
+const MAX_BALL_Y_VEL: f32 = MAX_PADDLE_VEL * 1.5 * FRAME_RATE;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Side {

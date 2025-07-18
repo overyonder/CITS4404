@@ -29,7 +29,7 @@ impl Controller for Player {
 
 impl Controller for Individual {
     fn pass(&self, state: &[f32; 9]) -> f32 {
-        let weights = &self.get_weights();
+        let weights = self.get_weights();
 
         // First hidden layer (16 neurons)
         let mut layer2 = [0.; 17];
