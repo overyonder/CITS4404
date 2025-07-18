@@ -1,66 +1,161 @@
-use macroquad::prelude::*;
-use pong_ai::{game::{self, PADDLE_LENGTH}, nn};
+use std::{thread, time::Duration};
+
+use macroquad::{miniquad::window::quit, prelude::*};
+use pong_ai::game::{
+    controllers::Player,
+    state::{FRAME_RATE, Game, HEIGHT, PADDLE_LENGTH, PADDLE_WIDTH, Side, WIDTH},
+};
+use pong_ai::nn::Group;
+
+const POP_SIZE: usize = 512;
+const GENERATIONS: usize = 512;
+const TOURNAMENT_SIZE: usize = POP_SIZE / 12;
+const ELITES: usize = {
+    let mut i = 1;
+    while i * i < POP_SIZE {
+        i += 1;
+    }
+    i
+};
 
 #[macroquad::main("MyGame")]
 async fn main() {
-    let mut game = game::Game::new(
-        game::Player {
-            up_key: KeyCode::W,
-            down_key: KeyCode::S,
-        },
-        game::Player {
-            up_key: KeyCode::Up,
-            down_key: KeyCode::Down,
-        },
-    );
+    let mut debugging: bool = false;
+    // let left = &Player {
+    //     up_key: KeyCode::W,
+    //     down_key: KeyCode::S,
+    // };
+    println!("ELITES: {}", ELITES);
+    println!("POP_SIZE: {}", POP_SIZE);
+    println!("GENERATIONS: {}", GENERATIONS);
+
+    let mut group = Group::new(POP_SIZE);
+    let mut game: Game = Game::default();
+    for i in 0..GENERATIONS {
+        group.train(&mut game, TOURNAMENT_SIZE);
+        group.individuals.sort();
+        group.mutate(ELITES);
+        if i % 24 == 0 {
+            println!("Generation: {}", i);
+            println!("Matches done: {}", i * POP_SIZE * (TOURNAMENT_SIZE - 1) / 2);
+            println!("Best fitness: {}", group.individuals[0].fitness);
+        }
+    }
+    let left = &group.individuals[0];
+    let right = &Player {
+        up_key: KeyCode::Up,
+        down_key: KeyCode::Down,
+    };
+    let mut game = Game::default();
     loop {
+        // Top-level input events
+        if is_key_released(KeyCode::Q) {
+            quit();
+        } else if is_key_released(KeyCode::N) {
+            debugging = !debugging;
+        }
+
+        // Game loop
         clear_background(BLACK);
-        draw_game(&game);
-        game.tick();
-        macroquad::time::draw_fps();
+        draw_game(&debugging, &game);
+        game.tick(left, right);
+
+        // Loop end
         next_frame().await;
-        std::thread::sleep(std::time::Duration::from_millis((1000.0 / game::FRAME_RATE) as u64));
+        thread::sleep(Duration::from_millis((1000. / FRAME_RATE) as u64));
     }
 }
 
-fn draw_game(game: &game::Game) {
+fn draw_game(debugging: &bool, game: &Game) {
     // Set up aspect ratio based on screen size and game WIDTH/HEIGHT
-    let aspect_ratio = game::WIDTH / game::HEIGHT;
+    let aspect_ratio = WIDTH / HEIGHT;
     let screen_width = screen_width();
     let screen_height = screen_height();
     // Scale to whichever dimension is smaller
     let scale = if screen_width > screen_height * aspect_ratio {
-        screen_height / game::HEIGHT
+        screen_height / HEIGHT
     } else {
-        screen_width / game::WIDTH
+        screen_width / WIDTH
     };
     // Created scaled values for the game elements
-    let paddle_length = game::PADDLE_LENGTH * scale;
-    let paddle_width = game::PADDLE_WIDTH * scale;
-    let field_width = game::WIDTH * scale;
-    let field_height = game::HEIGHT * scale;
+    let paddle_length = PADDLE_LENGTH * scale;
+    let paddle_width = PADDLE_WIDTH * scale;
+    let field_width = WIDTH * scale;
+    let field_height = HEIGHT * scale;
     // Offset is the distance from the left edge of the screen to the left edge of the field
-    let offset = (screen_width / 2.0 - field_width / 2.0, screen_height / 2.0 - field_height / 2.0);
+    let offset = (
+        screen_width / 2. - field_width / 2.,
+        screen_height / 2. - field_height / 2.,
+    );
+
+    draw_debug(
+        debugging,
+        game,
+        aspect_ratio,
+        scale,
+        paddle_length,
+        field_height,
+        offset,
+    );
 
     // Draw the field
-    draw_rectangle_lines(offset.0, offset.1, field_width, field_height, 2.0, GREEN);
+    draw_rectangle_lines(offset.0, offset.1, field_width, field_height, 2., GREEN);
     draw_rectangle(
-        // x, y, width, height, color
-        // left player first, x is 0. then right player, x is 1.
-        // y is inputs[0] and inputs[2]
-        // scale to screen size
         offset.0,
-        offset.1 + game.state[0] * scale - paddle_length,
+        offset.1 + game.left_pos() * scale - paddle_length / 2.,
         paddle_width,
         paddle_length,
         RED,
     );
     draw_rectangle(
         offset.0 + field_width - paddle_width,
-        offset.1 + game.state[2] * scale - paddle_length,
+        offset.1 + game.right_pos() * scale - paddle_length / 2.,
         paddle_width,
         paddle_length,
         BLUE,
     );
-    draw_circle(offset.0 + field_width / 2.0, offset.1 + field_height / 2.0, 0.01 * scale, GRAY);
+    draw_circle(
+        offset.0 + game.ball_pos_x() * scale,
+        offset.1 + game.ball_pos_y() * scale,
+        0.01 * scale,
+        GRAY,
+    );
+}
+
+fn draw_debug(
+    debugging: &bool,
+    game: &Game,
+    aspect_ratio: f32,
+    scale: f32,
+    paddle_length: f32,
+    field_height: f32,
+    offset: (f32, f32),
+) {
+    if *debugging {
+        draw_fps();
+        draw_text(&format!("State: {:?}", game.state), 0., 50., 16., YELLOW);
+        draw_text(
+            &format!(
+                "Aspect: {}, Scale: {}, Offset: {}|{}",
+                aspect_ratio, scale, offset.0, offset.1,
+            ),
+            0.,
+            70.,
+            16.,
+            YELLOW,
+        );
+        draw_text(
+            &format!(
+                "Height: {}. Paddle length: {}. Paddle from: {} - {}",
+                field_height,
+                paddle_length,
+                offset.1 + game.left_pos() * scale - paddle_length / 2.,
+                offset.1 + game.left_pos() * scale + paddle_length / 2.
+            ),
+            0.,
+            90.,
+            16.,
+            YELLOW,
+        );
+    }
 }

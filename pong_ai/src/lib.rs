@@ -1,2 +1,2 @@
-pub mod nn;
 pub mod game;
+pub mod nn;
