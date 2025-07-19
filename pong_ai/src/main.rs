@@ -32,7 +32,7 @@ async fn main() {
     let mut round = Instant::now();
     for i in 0..GENERATIONS {
         let longest_match = group.train(TOURNAMENT_SIZE);
-        group.get_individuals_mut().sort();
+        group.individuals_mut().sort();
         if i % (GENERATIONS / 32) == 0 {
             println!("Generations: {}", GENERATIONS);
             println!("Generations complete: {}", (i + 1));
@@ -59,20 +59,20 @@ async fn main() {
             println!(
                 "Fitnesses: {:?}",
                 group
-                    .get_individuals()
+                    .individuals()
                     .iter()
-                    .map(|i| i.get_fitness())
+                    .map(|i| i.fitness())
                     .collect::<Vec<_>>()
             );
             println!(
                 "Best weights: {:?}",
-                group.get_individuals()[POP_SIZE - 1].get_weights()
+                group.individuals()[POP_SIZE - 1].weights()
             );
         }
         group.mutate(ELITES, POP_SIZE);
     }
-    let left = &group.get_individuals()[POP_SIZE - 1];
-    let right = &group.get_individuals()[POP_SIZE - 2];
+    let left = &group.individuals()[POP_SIZE - 1];
+    let right = &group.individuals()[POP_SIZE - 2];
     let mut game = Game::default();
     loop {
         // Top-level input events
@@ -84,7 +84,7 @@ async fn main() {
 
         // Game loop
         clear_background(BLACK);
-        draw_game(&debugging, &game, screen_width(), screen_height());
+        draw_game(&debugging, screen_width(), screen_height(), &game, left, right);
         game.tick(left, right);
 
         // Loop end

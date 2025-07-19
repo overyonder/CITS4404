@@ -1,7 +1,5 @@
 pub const POP_SIZE: usize = 2048;
-
-pub const GENERATIONS: usize = 256;
-
+pub const GENERATIONS: usize = 24;
 pub const TOURNAMENT_SIZE: usize = {
     // Tournament size is the square root of the population size
     let mut i = 1;
@@ -10,7 +8,6 @@ pub const TOURNAMENT_SIZE: usize = {
     }
     i
 };
-
 pub const ELITES: usize = {
     // Elites is the square root of the population size
     let mut i = 1;
@@ -19,7 +16,6 @@ pub const ELITES: usize = {
     }
     i
 };
-
 pub const FORMER_CHAMPION: [f32; 217] = [
     1.0,
     0.9556299,

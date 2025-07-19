@@ -79,11 +79,11 @@ impl Individual {
         });
     }
 
-    pub fn get_weights(&self) -> &[f32; WEIGHTS] {
+    pub fn weights(&self) -> &[f32; WEIGHTS] {
         &self.weights
     }
 
-    pub fn get_fitness(&self) -> &i8 {
+    pub fn fitness(&self) -> &i8 {
         &self.fitness
     }
 }
@@ -105,11 +105,11 @@ impl Group {
         }
     }
 
-    pub fn get_individuals(&self) -> &[Individual] {
+    pub fn individuals(&self) -> &[Individual] {
         &self.individuals
     }
 
-    pub fn get_individuals_mut(&mut self) -> &mut [Individual] {
+    pub fn individuals_mut(&mut self) -> &mut [Individual] {
         &mut self.individuals
     }
 
@@ -124,7 +124,7 @@ impl Group {
     pub fn mutate(&mut self, elites: usize, pop_size: usize) {
         let (non_elites, elites_slice) = self.individuals.split_at_mut(pop_size - elites);
         non_elites.par_iter_mut().for_each(|individual| {
-            let elite_idx = rand::rng().random_range(0..elites);
+            let elite_idx = rand::rng().random_range(..elites);
             individual
                 .weights
                 .copy_from_slice(&elites_slice[elite_idx].weights);
