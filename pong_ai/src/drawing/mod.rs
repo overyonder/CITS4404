@@ -79,6 +79,8 @@ fn draw_debug<T: Controller, U: Controller>(
             YELLOW,
         );
         draw_state(offset, game, left, right);
+    } else {
+        draw_text("Press N to toggle debug info", 0., 0., 16., YELLOW);
     }
 }
 

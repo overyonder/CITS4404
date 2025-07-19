@@ -1,10 +1,15 @@
-use std::cmp::Ordering;
+// No threading for wasm
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use std::cell::RefCell;
+#[cfg(not(target_arch = "wasm32"))]
+use thread_local::ThreadLocal;
 
+use crate::game::state::{Game, Side};
 use rand::{self, Rng, seq::IteratorRandom};
 use rand_distr::Distribution;
-use rayon::prelude::*;
-
-use crate::game::state::Side;
+use std::cmp::Ordering;
 
 const WEIGHTS: usize = 9 * 16 + 17 * 4 + 5 * 1;
 
@@ -71,7 +76,7 @@ impl Ord for Individual {
 impl Individual {
     /// Mutates all weights by adding a small random value from a normal distribution and resets fitness.
     fn mutate(&mut self) {
-        self.weights.par_iter_mut().for_each(|weight| {
+        self.weights.iter_mut().for_each(|weight: &mut f32| {
             *weight += rand_distr::Normal::new(MEAN, STD_DEV)
                 .unwrap()
                 .sample(&mut rand::rng()) as f32;
@@ -99,7 +104,7 @@ impl Group {
     pub fn new(pop_size: usize) -> Self {
         Self {
             individuals: (0..pop_size)
-                .into_par_iter()
+                .into_iter()
                 .map(|_| Individual::default())
                 .collect(),
         }
@@ -123,7 +128,7 @@ impl Group {
     /// Mutates all individuals in the population in parallel.
     pub fn mutate(&mut self, elites: usize, pop_size: usize) {
         let (non_elites, elites_slice) = self.individuals.split_at_mut(pop_size - elites);
-        non_elites.par_iter_mut().for_each(|individual| {
+        non_elites.iter_mut().for_each(|individual| {
             let elite_idx = rand::rng().random_range(..elites);
             individual
                 .weights
@@ -138,49 +143,60 @@ impl Group {
     }
 
     /// Performs tournament evaluation on all individuals.
-    /// Each individual fights against 4 randomly chosen opponents.
+    /// Each individual fights against randomly chosen opponents.
     pub fn train(&mut self, tournament_size: usize) -> usize {
         let len = self.individuals.len();
-        use crate::game::state::Game;
-        use std::cell::RefCell;
-        use thread_local::ThreadLocal;
         // Thread-local Game for each thread
+        #[cfg(not(target_arch = "wasm32"))]
         let games = ThreadLocal::new();
+        #[cfg(target_arch = "wasm32")]
+        let mut game = Game::default();
         // Store (fitness_delta, longest_match_ticks) for each individual
-        let results: Vec<(i8, usize)> = (0..len)
-            .into_par_iter()
-            .map(|i| {
-                let (before, rest) = self.individuals.split_at(i);
-                let (current, after) = rest.split_first().unwrap();
-                // Select random opponents from remaining individuals
-                let others: Vec<&Individual> = before
-                    .iter()
-                    .chain(after.iter())
-                    .choose_multiple(&mut rand::rng(), tournament_size - 1);
-                // Use the thread's own Game instance
-                let game_cell = games.get_or(|| RefCell::new(Game::default()));
-                let mut delta = 0;
-                let mut indiv_longest = 0;
-                for (j, &opponent) in others.iter().enumerate() {
-                    let mut game = game_cell.borrow_mut();
-                    *game = Game::default(); // Reset game state
-                    let (winner, ticks) = game.run_until(
-                        current,
-                        opponent,
-                        if j % 2 == 0 { Side::Left } else { Side::Right },
-                    );
-                    if ticks > indiv_longest {
-                        indiv_longest = ticks;
+        let run_tournament = |i| {
+            let (before, rest) = self.individuals.split_at(i);
+            let (current, after) = rest.split_first().unwrap();
+            // Select random opponents from remaining individuals
+            let others: Vec<&Individual> = before
+                .iter()
+                .chain(after.iter())
+                .choose_multiple(&mut rand::rng(), tournament_size - 1);
+            // Use the thread's own Game instance
+            let mut delta = 0;
+            let mut indiv_longest = 0;
+            for (j, &opponent) in others.iter().enumerate() {
+                let game: &mut Game = {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        &mut *games.get_or(|| RefCell::new(Game::default())).borrow_mut()
                     }
-                    match winner {
-                        Side::Left => delta += 1,
-                        Side::Right => delta -= 1,
-                        Side::Neither => continue,
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        &mut game
                     }
-                }
-                (delta, indiv_longest)
-            })
-            .collect();
+                };
+
+                *game = Game::default();
+                let (winner, ticks) = game.run_until(
+                    current,
+                    opponent,
+                    if j % 2 == 0 { Side::Left } else { Side::Right },
+                );
+                indiv_longest = indiv_longest.max(ticks);
+                delta += match winner {
+                    Side::Left => 1,
+                    Side::Right => -1,
+                    Side::Neither => 0,
+                };
+            }
+
+            (delta, indiv_longest)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let results: Vec<(i8, usize)> = (0..len).into_par_iter().map(run_tournament).collect();
+
+        #[cfg(target_arch = "wasm32")]
+        let results: Vec<(i8, usize)> = (0..len).into_iter().map(run_tournament).collect();
+
         // Second pass: apply fitness deltas
         for (ind, (delta, _)) in self.individuals.iter_mut().zip(&results) {
             ind.fitness += *delta;
