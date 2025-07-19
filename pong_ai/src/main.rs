@@ -51,22 +51,15 @@ async fn main() {
                 FRAME_RATE * 120.
             );
             println!("Matches per round: {}", POP_SIZE * (TOURNAMENT_SIZE - 1));
-            round = Instant::now();
             println!(
                 "Matches per second: {}",
                 (POP_SIZE * (TOURNAMENT_SIZE - 1)) as f64 / round.elapsed().as_secs_f64()
             );
+            round = Instant::now();
             println!(
-                "Fitness histogram: {:?}",
-                (0..TOURNAMENT_SIZE)
-                    // Countr individuals with fitness i
-                    .map(|i| {
-                        group
-                            .individuals()
-                            .iter()
-                            .filter(|j| *j.fitness() as usize == i)
-                            .count()
-                    })
+                "Elites fitnesses: {:?}",
+                (POP_SIZE - ELITES..POP_SIZE)
+                    .map(|i| group.individuals()[i].fitness())
                     .collect::<Vec<_>>()
             );
             println!(
@@ -76,6 +69,7 @@ async fn main() {
         }
         group.mutate(ELITES, POP_SIZE);
     }
+    println!("Completed {} generations. Starting game.", GENERATIONS);
     let left = &group.individuals()[POP_SIZE - 1];
     let right = &group.individuals()[POP_SIZE - 2];
     let mut game = Game::default();
