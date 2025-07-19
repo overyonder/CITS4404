@@ -33,7 +33,7 @@ async fn main() {
     for i in 0..GENERATIONS {
         let longest_match = group.train(TOURNAMENT_SIZE);
         group.individuals_mut().sort();
-        if i % (GENERATIONS / 32) == 0 {
+        if i % GENERATIONS == 10 {
             println!("Generations: {}", GENERATIONS);
             println!("Generations complete: {}", (i + 1));
             println!("Population size: {}", POP_SIZE);
