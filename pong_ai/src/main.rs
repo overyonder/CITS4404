@@ -57,11 +57,16 @@ async fn main() {
                 (POP_SIZE * (TOURNAMENT_SIZE - 1)) as f64 / round.elapsed().as_secs_f64()
             );
             println!(
-                "Fitnesses: {:?}",
-                group
-                    .individuals()
-                    .iter()
-                    .map(|i| i.fitness())
+                "Fitness histogram: {:?}",
+                (0..TOURNAMENT_SIZE)
+                    // Countr individuals with fitness i
+                    .map(|i| {
+                        group
+                            .individuals()
+                            .iter()
+                            .filter(|j| *j.fitness() as usize == i)
+                            .count()
+                    })
                     .collect::<Vec<_>>()
             );
             println!(
@@ -84,7 +89,14 @@ async fn main() {
 
         // Game loop
         clear_background(BLACK);
-        draw_game(&debugging, screen_width(), screen_height(), &game, left, right);
+        draw_game(
+            &debugging,
+            screen_width(),
+            screen_height(),
+            &game,
+            left,
+            right,
+        );
         game.tick(left, right);
 
         // Loop end

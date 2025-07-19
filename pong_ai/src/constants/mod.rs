@@ -1,5 +1,5 @@
 pub const POP_SIZE: usize = 2048;
-pub const GENERATIONS: usize = 24;
+pub const GENERATIONS: usize = 128;
 pub const TOURNAMENT_SIZE: usize = {
     // Tournament size is the square root of the population size
     let mut i = 1;
