@@ -28,8 +28,8 @@
         flex-direction: row;
         justify-content: center;
         align-items: stretch;
-        width: 90vw;
-        min-width: 900px;
+        width: 80%;
+        height: 80%;
         max-width: 1300px;
         background: rgba(20, 20, 20, 0.92);
         border-radius: 18px;
@@ -43,9 +43,8 @@
         flex-direction: column;
         justify-content: flex-start;
         align-items: flex-start;
-        min-width: 320px;
-        max-width: 520px;
-        max-height: 80vh;
+        width: 95%;
+        height: 95%;
         overflow-y: auto;
       }
       h1 {
@@ -74,46 +73,32 @@
         color: #fff;
         text-decoration: underline;
       }
+      li {
+        font-size: 0.6rem;
+      }
       .canvas-container {
         flex: 1.7 1 0;
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        min-width: 400px;
-        max-width: 800px;
+        width: 95%;
+        height: 95%;
       }
       canvas {
-        margin: 0;
+        margin: 0px auto;
         padding: 20px;
-        width: 100%;
-        height: 480px;
+        width: 95%;
+        height: 95%;
         background: #000;
         z-index: 0;
         border-radius: 10px;
         box-shadow: 0 2px 16px 0 rgba(0, 0, 0, 0.6);
         display: block;
       }
-      @media (max-width: 1100px) {
+      @media (max-width: 800px) {
         .container {
           flex-direction: column;
-          min-width: 500px;
-          max-width: 98vw;
-          gap: 1.5rem;
-        }
-        .canvas-container,
-        .description {
-          min-width: 0;
-          max-width: 100%;
-          max-height: 60vh;
-          overflow-y: auto;
-        }
-        canvas {
-          width: 100%;
-          height: 320px;
-        }
-        li {
-          font-size: 0.6rem;
         }
       }
     </style>
@@ -236,27 +221,9 @@
         <canvas id="glcanvas" tabindex="1"></canvas>
       </div>
     </div>
-    <!-- Minified and statically hosted version of https://github.com/not-fl3/macroquad/blob/master/js/mq_js_bundle.js -->
     <script src="https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"></script>
-    <script>
-      // Plugin registration, see https://macroquad.rs/articles/wasm/ for more info
-      getrandom_plugin = function (importObject) {
-        // make macroquad_js_get_random_buffer() function available to call from rust
-        importObject.env.macroquad_js_get_random_buffer =
-          macroquad_js_get_random_buffer;
-      };
-
-      miniquad_add_plugin({ getrandom_plugin });
-
-      function macroquad_js_get_random_buffer(length) {
-        const myArray = new Uint8Array(length);
-        crypto.getRandomValues(myArray);
-        return js_object(myArray);
-      }
-    </script>
     <script>
       load("pong_ai.wasm");
     </script>
-    <!-- Your compiled wasm file -->
   </body>
 </html>
