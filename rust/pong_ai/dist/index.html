@@ -1,47 +1,262 @@
 <html lang="en">
-
-<head>
-    <meta charset="utf-8">
+  <head>
+    <meta charset="utf-8" />
     <title>Pong AI</title>
     <style>
-        html,
-        body,
-        canvas {
-            margin: 0px;
-            padding: 0px;
-            width: 60%;
-            height: 80%;
-            overflow: hidden;
-            position: absolute;
-            background: black;
-            z-index: 0;
+      html,
+      body {
+        margin: 0px;
+        padding: 0px;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+      }
+      body {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        width: 100vw;
+        color: #fff;
+        font-family: "Segoe UI", "Arial", "Helvetica Neue", Arial, sans-serif;
+        font-size: 1.1rem;
+        background: #000;
+      }
+      .container {
+        display: flex;
+        flex-direction: row;
+        justify-content: center;
+        align-items: stretch;
+        width: 90vw;
+        min-width: 900px;
+        max-width: 1300px;
+        background: rgba(20, 20, 20, 0.92);
+        border-radius: 18px;
+        box-shadow: 0 4px 32px 0 rgba(0, 0, 0, 0.7);
+        padding: 2.5rem 2rem 2rem 2rem;
+        gap: 2.5rem;
+      }
+      .description {
+        flex: 1.1 1 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: flex-start;
+        min-width: 320px;
+        max-width: 520px;
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+      h1 {
+        color: #fff;
+        font-size: 2rem;
+        font-weight: 700;
+        letter-spacing: 2px;
+        text-shadow: 0 2px 12px #222;
+        margin-top: 0;
+        margin-bottom: 1.2rem;
+      }
+      p {
+        color: #e0e0e0;
+        line-height: 1.6;
+        margin: 0.7rem 0;
+        text-align: left;
+        font-size: 1.13rem;
+      }
+      a {
+        color: #4fd1ff;
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.2s;
+      }
+      a:hover {
+        color: #fff;
+        text-decoration: underline;
+      }
+      .canvas-container {
+        flex: 1.7 1 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        min-width: 400px;
+        max-width: 800px;
+      }
+      canvas {
+        margin: 0;
+        padding: 20px;
+        width: 100%;
+        height: 480px;
+        background: #000;
+        z-index: 0;
+        border-radius: 10px;
+        box-shadow: 0 2px 16px 0 rgba(0, 0, 0, 0.6);
+        display: block;
+      }
+      @media (max-width: 1100px) {
+        .container {
+          flex-direction: column;
+          min-width: 500px;
+          max-width: 98vw;
+          gap: 1.5rem;
         }
+        .canvas-container,
+        .description {
+          min-width: 0;
+          max-width: 100%;
+          max-height: 60vh;
+          overflow-y: auto;
+        }
+        canvas {
+          width: 100%;
+          height: 320px;
+        }
+        li {
+          font-size: 0.6rem;
+        }
+      }
     </style>
-</head>
+  </head>
 
-<body>
-    <div
-        style="display: flex; justify-content: center; align-items: center; width: 100vw; height: 100vh; position: absolute; top: 0; left: 0;">
-        <canvas id="glcanvas" tabindex='1'></canvas>
+  <body>
+    <div class="container">
+      <div class="description">
+        <h1>Pong AI</h1>
+        <p>
+          This is a demo of an AI that learns to play Pong using a multi-layer
+          perceptron (MLP) evolved via an evolutionary algorithm.
+        </p>
+        <p>
+          The debug information above each agent shows the 21 neurons that make
+          up its "brain".
+        </p>
+        <p>
+          Press 'n' to hide the debug information.<br />
+          Press 'p' to cycle between three control modes: AI vs AI, AI vs Human,
+          and Human vs Human.<br />
+          Control the left paddle with the W and S keys.<br />
+          Control the right paddle with the ↑ and ↓ arrow keys.
+        </p>
+        <p>See if you can beat the AI you trained!</p>
+        <p>
+          The code is available on
+          <a
+            href="https://github.com/kaistarkk/pong_ai"
+            target="_blank"
+            rel="noopener"
+            >GitHub</a
+          >.
+        </p>
+        <details>
+          <summary><strong>Technical details:</strong></summary>
+          <ul>
+            <li>
+              Rendering is done with WebGL (more portable than WebGPU at this
+              stage) using
+              <a
+                href="https://github.com/not-fl3/macroquad"
+                target="_blank"
+                rel="noopener"
+                >Macroquad</a
+              >
+            </li>
+            <li>
+              The AI is implemented in Rust, compiled to WebAssembly (WASM) to
+              run in the browser.
+            </li>
+            <li>
+              The neural network is a 3-layer MLP with 8-16-4-1 layer
+              arrangement.
+            </li>
+            <li>
+              The genetic algorithm consists of 128 individuals in each
+              generation. Training in the browser runs for 100 generations, with
+              full round robin.
+            </li>
+            <li>
+              The mutation strategy is random gaussian mutation with no
+              crossover.
+            </li>
+            <li>
+              The fitness function is zero-sum score total from the round.
+            </li>
+            <li>Pre-trained champion:</li>
+            <ul>
+              <li>
+                I've pre-seeded the neural network with a locally trained
+                champion (to save your CPU). But the generations you see printed
+                to the screen, and the final result, is AI training happening in
+                your browser in WASM (with a bit of JavaScript glue!)
+              </li>
+              <li>
+                The "pre-trained" champion is the result of a few thousand
+                generations of training on a local machine with tournament
+                selection, different fitness functions (e.g. number of returns,
+                number of "shots on goal", time alive, etc.), using a variety of
+                mutation strategies (including single-point crossover and
+                uniform mutation with different strengths and rates). It even
+                went through a GPU phase with Torch, then WebGPU w/ GLSL compute
+                shaders, but ultimately found the most success with simple
+                multithreaded CPU training. Turns out pong isn't that much
+                faster on kernels.
+              </li>
+            </ul>
+          </ul>
+        </details>
+        <details>
+          <summary><strong>Acknowledgements:</strong></summary>
+          <p>
+            This project revisits a formative collaboration with a former peer
+            whose early contributions shaped its trajectory. The original
+            implementation—a C++ genetic algorithm with a neural network to
+            learn Pong—was largely his work. At the time, I lacked the technical
+            depth to fully grasp it. He brought competitive programming rigor
+            and algorithmic fluency that exceeded my understanding then.
+          </p>
+          <p>
+            Rebuilding it now in Rust serves a dual purpose: technical
+            redemption and continued learning. The performance gains from rustc
+            and LLVM's modern optimization pipeline—including SIMD
+            auto-vectorization—have made the reimplementation orders of
+            magnitude faster. More importantly, it’s been an exercise in
+            understanding compilation, lowering, and systems-level
+            design—concepts I hadn’t appreciated during the original effort.
+          </p>
+          <p>
+            The broader arc is about catching up with the field. Back in 2015,
+            transformers didn’t exist in the mainstream curriculum.
+            Reconstructing this project from first principles is a way to
+            retrace the path from classical neural networks to the architectures
+            that define modern AI—following the breadcrumbs, step by step.
+          </p>
+        </details>
+      </div>
+      <div class="canvas-container">
+        <canvas id="glcanvas" tabindex="1"></canvas>
+      </div>
     </div>
     <!-- Minified and statically hosted version of https://github.com/not-fl3/macroquad/blob/master/js/mq_js_bundle.js -->
     <script src="https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"></script>
     <script>
-        // Plugin registration, see https://macroquad.rs/articles/wasm/ for more info
-        getrandom_plugin = function (importObject) {
-            // make macroquad_js_get_random_buffer() function available to call from rust
-            importObject.env.macroquad_js_get_random_buffer = macroquad_js_get_random_buffer;
-        }
+      // Plugin registration, see https://macroquad.rs/articles/wasm/ for more info
+      getrandom_plugin = function (importObject) {
+        // make macroquad_js_get_random_buffer() function available to call from rust
+        importObject.env.macroquad_js_get_random_buffer =
+          macroquad_js_get_random_buffer;
+      };
 
-        miniquad_add_plugin({ getrandom_plugin });
+      miniquad_add_plugin({ getrandom_plugin });
 
-        function macroquad_js_get_random_buffer(length) {
-            const myArray = new Uint8Array(length);
-            crypto.getRandomValues(myArray);
-            return js_object(myArray);
-        }
+      function macroquad_js_get_random_buffer(length) {
+        const myArray = new Uint8Array(length);
+        crypto.getRandomValues(myArray);
+        return js_object(myArray);
+      }
     </script>
-    <script>load("pong_ai.wasm");</script> <!-- Your compiled wasm file -->
-</body>
-
+    <script>
+      load("pong_ai.wasm");
+    </script>
+    <!-- Your compiled wasm file -->
+  </body>
 </html>
