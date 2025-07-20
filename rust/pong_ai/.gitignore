@@ -19,5 +19,3 @@ Thumbs.db
 # Environment files
 .env
 .env.local
-
-# Note: dist/ directory is NOT ignored so it can be deployed to GitHub Pages 

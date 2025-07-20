@@ -8,7 +8,7 @@ The game is deployed on GitHub Pages: [https://yourusername.github.io/pong_ai/](
 
 ## Setup for GitHub Pages
 
-This project is configured to deploy to GitHub Pages from the `dist/` directory. The deployment happens automatically when you push to the `main` branch.
+This project is configured to deploy to GitHub Pages from the `docs/` directory. The deployment happens automatically when you push to the `main` branch.
 
 ### Prerequisites
 
@@ -21,7 +21,7 @@ This project is configured to deploy to GitHub Pages from the `dist/` directory.
 2. Click on **Settings** tab
 3. Scroll down to **Pages** section in the left sidebar
 4. Under **Source**, select **GitHub Actions**
-5. The workflow will automatically deploy from the `dist/` directory
+5. The workflow will automatically deploy from the `docs/` directory
 
 ### Manual Deployment
 
@@ -49,7 +49,7 @@ wasm-pack build --target web
 ## Project Structure
 
 - `src/` - Rust source code
-- `dist/` - Built web assets (deployed to GitHub Pages)
+- `docs/` - Built web assets (deployed to GitHub Pages)
 - `assets/` - Static assets
 - `.github/workflows/` - GitHub Actions deployment configuration
 
