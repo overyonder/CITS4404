@@ -1,0 +1,62 @@
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Pong AI</title>
+    <style>
+        html,
+        body,
+        canvas {
+            margin: 0px;
+            padding: 0px;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: absolute;
+            background: black;
+            z-index: 0;
+        }
+        .container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Pong AI</h1>
+        <p>This is a demo of an AI that learns to play Pong using a multi-layer perceptron (MLP) evolved via an evolutionary algorithm.</p>
+        <p>Clicking the link below will start training.</p>
+        <p>Note: I've pre-seeded the neural network with a locally trained champion (to save your CPU). But the generations you see printed to the screen, and the final result, is AI training happening in your browser in WASM (with a bit of JavaScript glue!)</p>        
+        
+        <p>The code is available on <a href="https://github.com/kaistarkk/pong-ai">GitHub</a>.</p>
+        <canvas id="glcanvas" tabindex='1'></canvas>
+    </div>
+    <!-- Minified and statically hosted version of https://github.com/not-fl3/macroquad/blob/master/js/mq_js_bundle.js -->
+    <script src="https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"></script>
+    <script>
+        // Plugin registration, see https://macroquad.rs/articles/wasm/ for more info
+        getrandom_plugin = function (importObject) {
+            // make macroquad_js_get_random_buffer() function available to call from rust
+            importObject.env.macroquad_js_get_random_buffer = macroquad_js_get_random_buffer;
+        }
+
+        miniquad_add_plugin({ getrandom_plugin });
+
+        function macroquad_js_get_random_buffer(length) {
+            const myArray = new Uint8Array(length);
+            crypto.getRandomValues(myArray);
+            return js_object(myArray);
+        }
+    </script>
+    <script>load("pong_ai.wasm");</script> <!-- Your compiled wasm file -->
+</body>
+
+</html>
