@@ -12,7 +12,7 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-const WEIGHTS: usize = 9 * 16 + 17 * 4 + 5 * 1;
+const WEIGHTS: usize = 9 * 16 + 17 * 4 + 5;
 
 const MEAN: f32 = 0.;
 const STD_DEV: f32 = 0.1;
@@ -77,11 +77,11 @@ impl Individual {
         });
     }
 
-    pub fn weights(&self) -> &[f32; WEIGHTS] {
+    #[must_use] pub fn weights(&self) -> &[f32; WEIGHTS] {
         &self.weights
     }
 
-    pub fn fitness(&self) -> &i16 {
+    #[must_use] pub fn fitness(&self) -> &i16 {
         &self.fitness
     }
 
@@ -98,16 +98,15 @@ pub struct Group {
 }
 
 impl Group {
-    pub fn new(pop_size: usize) -> Self {
+    #[must_use] pub fn new(pop_size: usize) -> Self {
         Self {
             individuals: (0..pop_size)
-                .into_iter()
                 .map(|_| Individual::default())
                 .collect(),
         }
     }
 
-    pub fn individuals(&self) -> &[Individual] {
+    #[must_use] pub fn individuals(&self) -> &[Individual] {
         &self.individuals
     }
 
@@ -116,7 +115,7 @@ impl Group {
     }
 
     pub fn inject_weights(&mut self, weights: &[f32], elites: usize, pop_size: usize) {
-        for individual in self.individuals.iter_mut() {
+        for individual in &mut self.individuals {
             individual.inject_weights(weights);
         }
         self.mutate(elites, pop_size);
@@ -124,14 +123,14 @@ impl Group {
 
     pub fn mutate(&mut self, elites: usize, pop_size: usize) {
         let (non_elites, elites_slice) = self.individuals.split_at_mut(pop_size - elites);
-        non_elites.iter_mut().for_each(|individual| {
+        for individual in non_elites.iter_mut() {
             let elite_idx = random_usize_range(0, elites);
             individual
                 .weights
                 .copy_from_slice(&elites_slice[elite_idx].weights);
             individual.mutate();
             individual.fitness = 0;
-        });
+        }
         // Reset fitness for elites
         for elite in elites_slice.iter_mut() {
             elite.fitness = 0;
@@ -164,7 +163,7 @@ impl Group {
                 let game: &mut Game = {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        &mut *games.get_or(|| RefCell::new(Game::default())).borrow_mut()
+                        &mut games.get_or(|| RefCell::new(Game::default())).borrow_mut()
                     }
                     #[cfg(target_arch = "wasm32")]
                     {
@@ -175,7 +174,7 @@ impl Group {
                 let (winner, ticks) = game.run_until(
                     current,
                     opponent,
-                    if j % 2 == 0 { Side::Left } else { Side::Right },
+                    if j.is_multiple_of(2) { Side::Left } else { Side::Right },
                 );
                 indiv_longest = indiv_longest.max(ticks);
                 delta += match winner {
@@ -194,7 +193,7 @@ impl Group {
         for (ind, (delta, _)) in self.individuals.iter_mut().zip(&results) {
             ind.fitness += *delta;
         }
-        let longest_match_ticks = results.iter().map(|(_, ticks)| *ticks).max().unwrap_or(0);
-        longest_match_ticks
+        
+        results.iter().map(|(_, ticks)| *ticks).max().unwrap_or(0)
     }
 }

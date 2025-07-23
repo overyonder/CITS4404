@@ -2,8 +2,8 @@
 use macroquad::miniquad::window;
 use macroquad::{miniquad::window::quit, prelude::*};
 use pong_ai::{
-    constants::*,
-    drawing::*,
+    constants::{FONT_SIZE, POP_SIZE, CHAMPION_SEED, ELITES, FIRST_CHAMPION, GENERATIONS},
+    drawing::{draw_training, draw_game},
     game::{
         controllers::Player,
         state::{Game, Side},

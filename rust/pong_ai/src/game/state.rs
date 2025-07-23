@@ -23,14 +23,14 @@ pub enum Side {
 
 /// Gamestate. Contains a complete representation of a single match point.
 pub struct Game {
-    /// - 0 = left_pos,      // [-0.5, 0.5]
-    /// - 1 = left_vel,      // [-1, 1]
-    /// - 2 = right_pos,     // [-0.5, 0.5]
-    /// - 3 = right_vel,     // [-1, 1]
-    /// - 4 = ball_pos_x,    // [-0.5, 0.5]
-    /// - 5 = ball_vel_x,    // [-1, 1]
-    /// - 6 = ball_pos_y,    // [-0.5, 0.5]
-    /// - 7 = ball_vel_y,    // [-1, 1]
+    /// - 0 = `left_pos`,      // [-0.5, 0.5]
+    /// - 1 = `left_vel`,      // [-1, 1]
+    /// - 2 = `right_pos`,     // [-0.5, 0.5]
+    /// - 3 = `right_vel`,     // [-1, 1]
+    /// - 4 = `ball_pos_x`,    // [-0.5, 0.5]
+    /// - 5 = `ball_vel_x`,    // [-1, 1]
+    /// - 6 = `ball_pos_y`,    // [-0.5, 0.5]
+    /// - 7 = `ball_vel_y`,    // [-1, 1]
     /// - 8 = bias           // 1.0
     pub state: [f32; 9],
 }
@@ -191,7 +191,7 @@ impl Game {
 // Separate impl block for all inline getters
 impl Game {
     #[inline(always)]
-    pub fn left_pos(&self) -> f32 {
+    #[must_use] pub fn left_pos(&self) -> f32 {
         self.state[0]
     }
     #[inline(always)]
@@ -199,7 +199,7 @@ impl Game {
         &mut self.state[0]
     }
     #[inline(always)]
-    pub fn left_vel(&self) -> f32 {
+    #[must_use] pub fn left_vel(&self) -> f32 {
         self.state[1]
     }
     #[inline(always)]
@@ -208,7 +208,7 @@ impl Game {
     }
 
     #[inline(always)]
-    pub fn right_pos(&self) -> f32 {
+    #[must_use] pub fn right_pos(&self) -> f32 {
         self.state[2]
     }
     #[inline(always)]
@@ -216,7 +216,7 @@ impl Game {
         &mut self.state[2]
     }
     #[inline(always)]
-    pub fn right_vel(&self) -> f32 {
+    #[must_use] pub fn right_vel(&self) -> f32 {
         self.state[3]
     }
     #[inline(always)]
@@ -225,7 +225,7 @@ impl Game {
     }
 
     #[inline(always)]
-    pub fn ball_pos_x(&self) -> f32 {
+    #[must_use] pub fn ball_pos_x(&self) -> f32 {
         self.state[4]
     }
     #[inline(always)]
@@ -233,7 +233,7 @@ impl Game {
         &mut self.state[4]
     }
     #[inline(always)]
-    pub fn ball_vel_x(&self) -> f32 {
+    #[must_use] pub fn ball_vel_x(&self) -> f32 {
         self.state[5]
     }
     #[inline(always)]
@@ -242,7 +242,7 @@ impl Game {
     }
 
     #[inline(always)]
-    pub fn ball_pos_y(&self) -> f32 {
+    #[must_use] pub fn ball_pos_y(&self) -> f32 {
         self.state[6]
     }
     #[inline(always)]
@@ -250,7 +250,7 @@ impl Game {
         &mut self.state[6]
     }
     #[inline(always)]
-    pub fn ball_vel_y(&self) -> f32 {
+    #[must_use] pub fn ball_vel_y(&self) -> f32 {
         self.state[7]
     }
     #[inline(always)]

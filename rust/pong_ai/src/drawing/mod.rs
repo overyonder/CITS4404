@@ -1,5 +1,5 @@
 use crate::{
-    constants::*,
+    constants::{FONT_SIZE, GENERATIONS, POP_SIZE, ELITES, TOURNAMENT_SIZE},
     game::{
         controllers::Controller,
         state::{FRAME_RATE, Game, HEIGHT, PADDLE_LENGTH, PADDLE_WIDTH, Side, WIDTH},
@@ -29,7 +29,7 @@ pub fn draw_training(
 ) {
     draw_text("Loading...", 0., FONT_SIZE * 0.5, FONT_SIZE, YELLOW);
     draw_text(
-        &format!("Generations: {}", GENERATIONS),
+        &format!("Generations: {GENERATIONS}"),
         0.,
         FONT_SIZE * 1.5,
         FONT_SIZE,
@@ -63,21 +63,21 @@ pub fn draw_training(
         );
     }
     draw_text(
-        &format!("Population size: {}", POP_SIZE),
+        &format!("Population size: {POP_SIZE}"),
         0.,
         FONT_SIZE * 5.5,
         FONT_SIZE,
         WHITE,
     );
     draw_text(
-        &format!("Elites: {}", ELITES),
+        &format!("Elites: {ELITES}"),
         0.,
         FONT_SIZE * 6.5,
         FONT_SIZE,
         WHITE,
     );
     draw_text(
-        &format!("Tournament size: {}", TOURNAMENT_SIZE),
+        &format!("Tournament size: {TOURNAMENT_SIZE}"),
         0.,
         FONT_SIZE * 7.5,
         FONT_SIZE,
@@ -101,7 +101,7 @@ pub fn draw_training(
         WHITE,
     );
     draw_text(
-        &format!("Round time: {:?}", delta),
+        &format!("Round time: {delta:?}"),
         0.,
         FONT_SIZE * 10.5,
         FONT_SIZE,
