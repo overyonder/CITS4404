@@ -7,20 +7,33 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        overlays = [ (import rust-overlay) ];
+  outputs = {
+    self,
+    nixpkgs,
+    rust-overlay,
+    flake-utils,
+  }:
+    flake-utils.lib.eachDefaultSystem (
+      system: let
+        overlays = [(import rust-overlay)];
         pkgs = import nixpkgs {
           inherit system overlays;
         };
 
         # Use the latest stable Rust toolchain
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" "rustfmt" "clippy" ];
+          extensions = ["rust-src" "rustfmt" "clippy"];
         };
-      in
-      {
+        # Runtime library path for dynamic libs (X11/OpenGL/etc.)
+        libraryPath = pkgs.lib.makeLibraryPath [
+          pkgs.libGL
+          pkgs.xorg.libX11
+          pkgs.xorg.libXcursor
+          pkgs.xorg.libXrandr
+          pkgs.xorg.libXi
+          pkgs.libxkbcommon
+        ];
+      in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             # Rust toolchain
@@ -41,6 +54,7 @@
           ];
 
           shellHook = ''
+            export LD_LIBRARY_PATH=${libraryPath}:$LD_LIBRARY_PATH
             echo "Rust development environment for pong_ai"
             echo "Rust version: $(rustc --version)"
             echo "Cargo version: $(cargo --version)"
