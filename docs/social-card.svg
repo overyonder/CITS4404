@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#020504"/>
+  <rect x="38" y="38" width="1124" height="554" fill="none" stroke="#193b2d" stroke-width="3"/>
+  <path d="M600 70V560" stroke="#17432f" stroke-width="4" stroke-dasharray="18 20"/>
+  <rect x="88" y="214" width="16" height="146" rx="8" fill="#79ffb2"/><rect x="1096" y="284" width="16" height="146" rx="8" fill="#79ffb2"/><circle cx="742" cy="188" r="14" fill="#ffbd59"/>
+  <g fill="none" stroke="#79ffb2" stroke-width="2" opacity=".7"><circle cx="270" cy="184" r="7"/><circle cx="336" cy="143" r="7"/><circle cx="336" cy="225" r="7"/><circle cx="408" cy="116" r="7"/><circle cx="408" cy="184" r="7"/><circle cx="408" cy="252" r="7"/><path d="M277 184L329 143M277 184L329 225M343 143L401 116M343 143L401 184M343 225L401 184M343 225L401 252"/></g>
+  <text x="74" y="100" fill="#79ffb2" font-family="ui-monospace, monospace" font-size="22" letter-spacing="5">WEBASSEMBLY / NEURAL TRAINING</text>
+  <text x="70" y="430" fill="#f1fff7" font-family="Arial, sans-serif" font-size="116" font-weight="700">Pong AI</text>
+  <text x="75" y="505" fill="#87a895" font-family="Arial, sans-serif" font-size="37">The network learns in your browser.</text>
+  <text x="76" y="557" fill="#ffbd59" font-family="ui-monospace, monospace" font-size="18" letter-spacing="3">128 PLAYERS · FULL ROUND ROBIN · 100 GENERATIONS</text>
+</svg>
