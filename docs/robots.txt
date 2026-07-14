@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://pong.over-yonder.tech/sitemap.xml
