@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -111,17 +112,18 @@
       <div class="description">
         <h1>Pong AI</h1>
         <p>
-          This is a demo of an AI that learns to play Pong using a multi-layer
-          perceptron (MLP) evolved via an evolutionary algorithm.
+          Pong AI trains an artificial-intelligence (AI) player in the browser. Its
+          controller is a multilayer perceptron (MLP), a small neural network
+          evolved through repeated games of Pong.
         </p>
         <p>
           The debug information above each agent shows the 21 neurons that make
           up its "brain".
         </p>
         <p>
-          Press 'n' to hide the debug information.<br />
-          Press 'p' to cycle between three control modes: AI vs AI, AI vs Human,
-          and Human vs Human.<br />
+          Press <kbd>N</kbd> to hide the debug information.<br />
+          Press <kbd>P</kbd> to cycle between three control modes: AI vs AI, AI vs human,
+          and human vs human.<br />
           Control the left paddle with the W and S keys.<br />
           Control the right paddle with the ↑ and ↓ arrow keys.
         </p>
@@ -139,8 +141,8 @@
           <summary><strong>Technical details:</strong></summary>
           <ul>
             <li>
-              Rendering is done with WebGL (more portable than WebGPU at this
-              stage) using
+              Macroquad renders the game through the browser's Web Graphics
+              Library (WebGL) interface using
               <a
                 href="https://github.com/not-fl3/macroquad"
                 target="_blank"
@@ -149,7 +151,7 @@
               >
             </li>
             <li>
-              The AI is implemented in Rust, compiled to WebAssembly (WASM) to
+              The AI is implemented in Rust and compiled to WebAssembly to
               run in the browser.
             </li>
             <li>
@@ -157,12 +159,12 @@
               arrangement.
             </li>
             <li>
-              The genetic algorithm consists of 128 individuals in each
-              generation. Training in the browser runs for 100 generations, with
-              full round robin.
+              Each genetic-algorithm generation contains 128 players. Browser
+              training runs for 100 generations, with every player competing in
+              a full round-robin tournament.
             </li>
             <li>
-              The mutation strategy is random gaussian mutation with no
+              The mutation strategy is random Gaussian mutation with no
               crossover.
             </li>
             <li>
@@ -172,29 +174,25 @@
               The output layer activation is a hyperbolic tangent (tanh).
             </li>
             <li>
-              The fitness function is zero-sum score total from the round.
+              Each player's fitness is its zero-sum score across the tournament.
             </li>
-            <li>Pre-trained champion:</li>
+            <li>Pre-trained champion:
             <ul>
               <li>
-                I've pre-seeded the neural network with a locally trained
-                champion (to save your CPU). But the generations you see printed
-                to the screen, and the final result, is AI training happening in
-                your browser in WASM (with a bit of JavaScript glue!)
+                The initial population includes a locally trained champion to
+                reduce the work on your processor. The generations shown on
+                screen, including the final result, are still trained in your
+                browser through WebAssembly with a small JavaScript loader.
               </li>
               <li>
-                The "pre-trained" champion is the result of a few thousand
-                generations of training on a local machine with tournament
-                selection, different fitness functions (e.g. number of returns,
-                number of "shots on goal", time alive, etc.), using a variety of
-                mutation strategies (including single-point crossover and
-                uniform mutation with different strengths and rates). It even
-                went through a GPU phase with Torch, then WebGPU w/ GLSL compute
-                shaders, but ultimately found the most success with simple
-                multithreaded CPU training. Turns out pong isn't that much
-                faster on kernels.
+                The champion came from several thousand local generations that
+                tested tournament selection, different fitness functions and
+                several mutation and crossover strategies. Experiments also used
+                graphics-processor compute, but simple multithreaded processor
+                training produced the best results for this small workload.
               </li>
             </ul>
+            </li>
           </ul>
         </details>
         <details>
@@ -209,11 +207,10 @@
           </p>
           <p>
             Rebuilding it now in Rust serves a dual purpose: technical
-            redemption and continued learning. The performance gains from rustc
-            and LLVM's modern optimization pipeline—including SIMD
-            auto-vectorization—have made the reimplementation orders of
-            magnitude faster. More importantly, it’s been an exercise in
-            understanding compilation, lowering, and systems-level
+            redemption and continued learning. The implementation uses ordinary
+            compiler optimization, including automatic vectorization where the
+            compiler finds suitable loops. More importantly, it’s been an
+            exercise in understanding compilation, lowering and systems-level
             design—concepts I hadn’t appreciated during the original effort.
           </p>
           <p>
